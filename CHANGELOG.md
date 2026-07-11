@@ -2,6 +2,14 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.6.3] — 2026-07-11
+
+### Fix trackpad scroll broken by 0.6.2
+
+- Replace `scrollLines` + event-swallow path with direct `.xterm-viewport.scrollTop` (same as xterm internals)
+- Keep high gain for pixel deltas; fall back to xterm default when there is no scrollback
+- Restores scrolling while remaining faster than stock sensitivity
+
 ## [0.6.2] — 2026-07-11
 
 ### Trackpad scroll (macOS)

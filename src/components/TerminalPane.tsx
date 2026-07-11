@@ -9,13 +9,11 @@ import "@xterm/xterm/css/xterm.css";
 const TERM_FONT_SIZE = 12;
 
 /**
- * macOS trackpad sends many small pixel deltas. xterm's default conversion
- * (scrollSensitivity × deltaY / rowHeight, floored) feels capped-slow.
- * Extra gain is applied in our custom wheel handler.
+ * Multiply trackpad/mouse wheel pixel deltas before applying to the viewport.
+ * xterm's own handler uses scrollSensitivity=1-equivalent pixel math and feels
+ * glacial on macOS trackpads; we drive `.xterm-viewport.scrollTop` directly.
  */
-const TRACKPAD_SCROLL_GAIN = 4.5;
-/** Minimum lines to jump when a non-trivial flick is detected */
-const TRACKPAD_MIN_LINES = 1;
+const TRACKPAD_SCROLL_GAIN = 3.25;
 
 /**
  * Prefer mono fonts that measure CJK as double-width consistently.
@@ -59,10 +57,6 @@ export default function TerminalPane({
   const focusTimerRef = useRef<number | null>(null);
   const resizeTimerRef = useRef<number | null>(null);
   const sessionIdRef = useRef(sessionId);
-  /** Sub-line wheel accumulation for trackpad pixel deltas */
-  const wheelAccumRef = useRef(0);
-  const wheelRafRef = useRef<number | null>(null);
-  const wheelPendingLinesRef = useRef(0);
 
   useEffect(() => {
     sessionIdRef.current = sessionId;
@@ -194,9 +188,9 @@ export default function TerminalPane({
       scrollback: 5000,
       convertEol: false,
       windowsMode: false,
-      // Backup if custom wheel handler is bypassed
-      scrollSensitivity: 12,
-      fastScrollSensitivity: 20,
+      // Used when custom wheel is not attached yet / falls through
+      scrollSensitivity: 8,
+      fastScrollSensitivity: 16,
       smoothScrollDuration: 0,
       rescaleOverlappingGlyphs: false,
     });
@@ -215,49 +209,22 @@ export default function TerminalPane({
     );
     term.open(hostRef.current);
     // Canvas renderer: WebGL + multi-tab + CJK was capping trackpad scroll FPS.
-    // Prefer snappy scroll over GPU path for the embedded CLI.
     fit.fit();
 
     termRef.current = term;
     fitRef.current = fit;
     lastDimsRef.current = { cols: term.cols, rows: term.rows };
-    wheelAccumRef.current = 0;
-    wheelPendingLinesRef.current = 0;
 
     /**
-     * Custom wheel path tuned for macOS trackpad:
-     * - pixel deltas → lines with high gain
-     * - coalesce to one scrollLines per animation frame (keeps up with flicks)
-     * Returning `false` tells xterm to skip its own slow default handler.
+     * Drive scroll the same way xterm does internally (viewport.scrollTop),
+     * but with a higher gain for macOS trackpad pixel deltas.
+     *
+     * Previous approach used term.scrollLines() + swallowed zero-line events,
+     * which blocked scrolling entirely on small trackpad deltas.
+     * Return `false` so xterm skips its default low-gain handler.
      */
-    const flushWheelLines = () => {
-      wheelRafRef.current = null;
-      const lines = wheelPendingLinesRef.current;
-      wheelPendingLinesRef.current = 0;
-      if (lines !== 0) {
-        try {
-          term.scrollLines(lines);
-        } catch {
-          /* ignore */
-        }
-      }
-    };
-
-    const estimateRowPx = () => {
-      // Prefer measured cell height from the live DOM when available
-      const screen = hostRef.current?.querySelector(
-        ".xterm-screen",
-      ) as HTMLElement | null;
-      const h = screen?.clientHeight;
-      const rows = term.rows || 1;
-      if (h && rows > 0) return Math.max(10, h / rows);
-      return Math.max(12, TERM_FONT_SIZE * 1.15);
-    };
-
     term.attachCustomWheelEventHandler((ev) => {
-      // Let shift+wheel (horizontal) and pure horizontal gestures through
-      if (ev.shiftKey) return true;
-      if (ev.deltaY === 0) return true;
+      if (ev.shiftKey || ev.deltaY === 0) return true;
       if (
         Math.abs(ev.deltaX) > Math.abs(ev.deltaY) &&
         Math.abs(ev.deltaX) > 1
@@ -265,45 +232,43 @@ export default function TerminalPane({
         return true;
       }
 
-      let lines = 0;
-      if (ev.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
-        lines = ev.deltaY * Math.max(1, term.rows);
-      } else if (ev.deltaMode === WheelEvent.DOM_DELTA_LINE) {
-        // Discrete mouse wheel notches — keep snappy
-        lines = ev.deltaY * 4;
+      const viewport = term.element?.querySelector(
+        ".xterm-viewport",
+      ) as HTMLElement | null;
+      if (!viewport) return true; // fall back to xterm default
+
+      // Alt-buffer / no overflow: let xterm map wheel to app cursor keys
+      const maxScroll = Math.max(
+        0,
+        viewport.scrollHeight - viewport.clientHeight,
+      );
+      if (maxScroll < 1) return true;
+
+      const rowPx = Math.max(
+        10,
+        (viewport.clientHeight || term.rows * TERM_FONT_SIZE) /
+          Math.max(1, term.rows),
+      );
+
+      let pixels = 0;
+      if (ev.deltaMode === WheelEvent.DOM_DELTA_LINE) {
+        pixels = ev.deltaY * rowPx * 3;
+      } else if (ev.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
+        pixels = ev.deltaY * viewport.clientHeight;
       } else {
-        // DOM_DELTA_PIXEL — macOS trackpad path
-        const rowPx = estimateRowPx();
-        const raw = (ev.deltaY / rowPx) * TRACKPAD_SCROLL_GAIN;
-        wheelAccumRef.current += raw;
-        if (Math.abs(wheelAccumRef.current) >= TRACKPAD_MIN_LINES) {
-          lines =
-            Math.trunc(wheelAccumRef.current) ||
-            (wheelAccumRef.current > 0 ? 1 : -1);
-          wheelAccumRef.current -= lines;
-        }
+        // DOM_DELTA_PIXEL — trackpad
+        pixels = ev.deltaY * TRACKPAD_SCROLL_GAIN;
       }
 
-      // Scale by velocity: large |deltaY| flicks jump further in one frame
-      if (ev.deltaMode === WheelEvent.DOM_DELTA_PIXEL) {
-        const boost = Math.min(3, Math.abs(ev.deltaY) / 80);
-        if (boost > 1 && lines !== 0) {
-          lines = Math.round(lines * boost);
-        }
-      }
+      if (pixels === 0) return true;
 
-      if (lines === 0) {
-        // Still consume the event so the browser does not rubber-band the pane
-        ev.preventDefault();
-        return false;
-      }
-
-      wheelPendingLinesRef.current += lines;
-      if (wheelRafRef.current == null) {
-        wheelRafRef.current = window.requestAnimationFrame(flushWheelLines);
-      }
+      const next = Math.min(
+        maxScroll,
+        Math.max(0, viewport.scrollTop + pixels),
+      );
+      // Assigning scrollTop fires xterm's scroll listener and syncs the buffer.
+      viewport.scrollTop = next;
       ev.preventDefault();
-      // false → xterm skips its default (low-gain) wheel handling
       return false;
     });
 
@@ -372,12 +337,6 @@ export default function TerminalPane({
     return () => {
       clearFocusTimer();
       clearResizeTimer();
-      if (wheelRafRef.current != null) {
-        window.cancelAnimationFrame(wheelRafRef.current);
-        wheelRafRef.current = null;
-      }
-      wheelAccumRef.current = 0;
-      wheelPendingLinesRef.current = 0;
       onData();
       onExit();
       onFocusReq();
