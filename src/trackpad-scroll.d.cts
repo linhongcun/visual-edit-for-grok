@@ -7,3 +7,8 @@ export function trackpadScrollPixels(
 ): number;
 
 export function trackpadScrollPixelsFromFrame(frameDeltaY: number): number;
+
+export function trackpadTuiWheelImpulseFromFrame(
+  frameDeltaY: number,
+  rowPx: number,
+): number;

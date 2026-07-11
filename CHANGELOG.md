@@ -2,6 +2,15 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.6.8] — 2026-07-12
+
+### Trackpad scroll root-cause fix (screen + TUI)
+
+- Listen for wheel on xterm root (not only `.xterm-viewport`); gestures over `.xterm-screen` now accelerate
+- Frame-batched pixel deltas for scrollback velocity
+- Alternate-buffer mouse-reporting TUIs: convert flick energy into multiple SGR wheel impulses
+- Smoke + unit coverage for scrollback and Grok-like TUI wheel acceleration
+
 ## [0.6.7] — 2026-07-12
 
 ### Preview chrome usability + smoke hardening

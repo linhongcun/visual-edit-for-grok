@@ -1255,7 +1255,7 @@ code {
 }
 
 .terminal-host .xterm-viewport {
-  /* xterm owns wheel → scrollTop; keep native overflow without smooth animation */
+  /* App/xterm wheel paths share scrollTop; keep native overflow unsmoothed. */
   overflow-y: scroll !important;
   overscroll-behavior: contain;
   scroll-behavior: auto;

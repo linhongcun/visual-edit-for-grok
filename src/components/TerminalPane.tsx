@@ -4,7 +4,11 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
-import { trackpadScrollPixelsFromFrame } from "../trackpad-scroll.cjs";
+import {
+  trackpadScrollPixels,
+  trackpadScrollPixelsFromFrame,
+  trackpadTuiWheelImpulseFromFrame,
+} from "../trackpad-scroll.cjs";
 import "@xterm/xterm/css/xterm.css";
 
 /** Slightly smaller than 13 so the same pane fits more columns (helps wide CJK tables). */
@@ -55,6 +59,9 @@ export default function TerminalPane({
   /** Pixel-mode deltaY summed within the current animation frame */
   const wheelFrameDeltaRef = useRef(0);
   const wheelFrameRafRef = useRef<number | null>(null);
+  const wheelFrameEventRef = useRef<WheelEventInit | null>(null);
+  /** Fractional TUI wheel reports carried into the next animation frame. */
+  const tuiWheelRemainderRef = useRef(0);
 
   useEffect(() => {
     sessionIdRef.current = sessionId;
@@ -229,47 +236,107 @@ export default function TerminalPane({
     fitRef.current = fit;
     lastDimsRef.current = { cols: term.cols, rows: term.rows };
     wheelFrameDeltaRef.current = 0;
+    wheelFrameEventRef.current = null;
+    tuiWheelRemainderRef.current = 0;
 
     /**
-     * Own wheel in capture phase on the viewport so we always see raw
-     * trackpad deltas (xterm's default path feels velocity-capped).
-     * Pixel deltas are batched per animation frame: a fast flick dumps a
-     * large sum into one frame → high gain; a slow glide keeps small sums.
+     * Own precision wheel in capture phase on xterm's root. The visible
+     * .xterm-screen and the scrollable .xterm-viewport are siblings, so a
+     * listener on the viewport alone never sees gestures over terminal text.
      */
     const viewportEl = term.element?.querySelector(
       ".xterm-viewport",
     ) as HTMLElement | null;
+    const terminalEl = term.element;
+    const forwardedWheelEvents = new WeakSet<WheelEvent>();
+
+    const terminalRowPx = (viewport: HTMLElement) =>
+      Math.max(
+        10,
+        (viewport.clientHeight || term.rows * TERM_FONT_SIZE) /
+          Math.max(1, term.rows),
+      );
 
     const flushWheelFrame = () => {
       wheelFrameRafRef.current = null;
-      const viewport = term.element?.querySelector(
-        ".xterm-viewport",
-      ) as HTMLElement | null;
+      const viewport = viewportEl;
+      const frameEvent = wheelFrameEventRef.current;
+      wheelFrameEventRef.current = null;
       if (!viewport) {
         wheelFrameDeltaRef.current = 0;
-        return;
-      }
-      const maxScroll = Math.max(
-        0,
-        viewport.scrollHeight - viewport.clientHeight,
-      );
-      if (maxScroll < 1) {
-        wheelFrameDeltaRef.current = 0;
+        tuiWheelRemainderRef.current = 0;
         return;
       }
       const frameDelta = wheelFrameDeltaRef.current;
       wheelFrameDeltaRef.current = 0;
       if (frameDelta === 0) return;
 
-      const pixels = trackpadScrollPixelsFromFrame(frameDelta);
-      if (pixels === 0) return;
-      viewport.scrollTop = Math.min(
-        maxScroll,
-        Math.max(0, viewport.scrollTop + pixels),
+      const maxScroll = Math.max(
+        0,
+        viewport.scrollHeight - viewport.clientHeight,
       );
+      const rowPx = terminalRowPx(viewport);
+
+      if (maxScroll >= 1) {
+        tuiWheelRemainderRef.current = 0;
+        const pixels = trackpadScrollPixelsFromFrame(frameDelta);
+        if (pixels === 0) return;
+        viewport.scrollTop = Math.min(
+          maxScroll,
+          Math.max(0, viewport.scrollTop + pixels),
+        );
+        return;
+      }
+
+      const isMouseReportingTui =
+        term.buffer.active.type === "alternate" &&
+        term.modes.mouseTrackingMode !== "none";
+      if (!isMouseReportingTui || !terminalEl || !frameEvent) {
+        tuiWheelRemainderRef.current = 0;
+        return;
+      }
+
+      const impulse = trackpadTuiWheelImpulseFromFrame(frameDelta, rowPx);
+      if (
+        tuiWheelRemainderRef.current !== 0 &&
+        Math.sign(tuiWheelRemainderRef.current) !== Math.sign(impulse)
+      ) {
+        tuiWheelRemainderRef.current = 0;
+      }
+      const total = tuiWheelRemainderRef.current + impulse;
+      const steps = Math.trunc(total);
+      tuiWheelRemainderRef.current = total - steps;
+      if (steps === 0) return;
+
+      const direction = Math.sign(steps);
+      const forwardTarget =
+        terminalEl.querySelector<HTMLElement>(".xterm-screen") || terminalEl;
+      for (let index = 0; index < Math.abs(steps); index += 1) {
+        const forwarded = new WheelEvent("wheel", {
+          ...frameEvent,
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          deltaX: 0,
+          deltaY: direction,
+          deltaMode: WheelEvent.DOM_DELTA_LINE,
+        });
+        forwardedWheelEvents.add(forwarded);
+        forwardTarget.dispatchEvent(forwarded);
+      }
     };
 
-    const onViewportWheel = (ev: WheelEvent) => {
+    const consumeWheel = (ev: WheelEvent) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      ev.stopImmediatePropagation();
+    };
+
+    const onTerminalWheel = (ev: WheelEvent) => {
+      if (forwardedWheelEvents.has(ev)) {
+        forwardedWheelEvents.delete(ev);
+        return;
+      }
       if (ev.shiftKey || ev.deltaY === 0) return;
       if (
         Math.abs(ev.deltaX) > Math.abs(ev.deltaY) &&
@@ -278,76 +345,64 @@ export default function TerminalPane({
         return;
       }
 
-      const viewport = ev.currentTarget as HTMLElement;
+      const viewport = viewportEl;
+      if (!viewport) return;
       const maxScroll = Math.max(
         0,
         viewport.scrollHeight - viewport.clientHeight,
       );
-      // No overflow (alt buffer / full-screen TUI): do not steal the event
-      if (maxScroll < 1) return;
+      const isPixelMode = ev.deltaMode === WheelEvent.DOM_DELTA_PIXEL;
+      const isMouseReportingTui =
+        maxScroll < 1 &&
+        term.buffer.active.type === "alternate" &&
+        term.modes.mouseTrackingMode !== "none";
 
-      const rowPx = Math.max(
-        10,
-        (viewport.clientHeight || term.rows * TERM_FONT_SIZE) /
-          Math.max(1, term.rows),
-      );
+      // Non-pixel wheel events and non-mouse-reporting alternate buffers keep
+      // xterm's native semantics (including arrow-key conversion for TUIs).
+      if (maxScroll < 1 && (!isMouseReportingTui || !isPixelMode)) return;
 
-      // Normalize all modes into pixel-space before batching
-      let pixelDelta = 0;
-      if (ev.deltaMode === WheelEvent.DOM_DELTA_LINE) {
-        pixelDelta = ev.deltaY * rowPx;
-      } else if (ev.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
-        pixelDelta = ev.deltaY * viewport.clientHeight;
-      } else {
-        pixelDelta = ev.deltaY;
-      }
-      // Some Electron builds expose a larger wheelDeltaY; use the stronger signal
-      const wheelDeltaY =
-        typeof (ev as WheelEvent & { wheelDeltaY?: number }).wheelDeltaY ===
-        "number"
-          ? (ev as WheelEvent & { wheelDeltaY?: number }).wheelDeltaY || 0
-          : 0;
-      if (wheelDeltaY !== 0 && Math.abs(wheelDeltaY) / 3 > Math.abs(pixelDelta)) {
-        // Legacy wheelDeltaY is inverted vs deltaY and ~3× CSS pixels
-        pixelDelta = -wheelDeltaY / 3;
+      const rowPx = terminalRowPx(viewport);
+      if (maxScroll >= 1 && !isPixelMode) {
+        const pixels = trackpadScrollPixels(
+          ev.deltaY,
+          ev.deltaMode,
+          rowPx,
+          viewport.clientHeight,
+          16,
+        );
+        viewport.scrollTop = Math.min(
+          maxScroll,
+          Math.max(0, viewport.scrollTop + pixels),
+        );
+        consumeWheel(ev);
+        return;
       }
 
-      if (pixelDelta === 0) return;
-
-      // Batch into one scrollTop write per frame — flicks coalesce into big sums
-      wheelFrameDeltaRef.current += pixelDelta;
+      wheelFrameDeltaRef.current += ev.deltaY;
+      wheelFrameEventRef.current = {
+        view: window,
+        clientX: ev.clientX,
+        clientY: ev.clientY,
+        screenX: ev.screenX,
+        screenY: ev.screenY,
+        ctrlKey: ev.ctrlKey,
+        altKey: ev.altKey,
+        metaKey: ev.metaKey,
+      };
       if (wheelFrameRafRef.current == null) {
         wheelFrameRafRef.current =
           window.requestAnimationFrame(flushWheelFrame);
       }
 
-      ev.preventDefault();
-      ev.stopPropagation();
-      // Prevent xterm's own bubble handler from applying a second low-gain scroll
-      ev.stopImmediatePropagation();
+      consumeWheel(ev);
     };
 
-    if (viewportEl) {
-      viewportEl.addEventListener("wheel", onViewportWheel, {
+    if (terminalEl) {
+      terminalEl.addEventListener("wheel", onTerminalWheel, {
         passive: false,
         capture: true,
       });
     }
-    // Block xterm default wheel when we own scrolling (scrollback present)
-    term.attachCustomWheelEventHandler((ev) => {
-      const viewport = term.element?.querySelector(
-        ".xterm-viewport",
-      ) as HTMLElement | null;
-      if (!viewport) return true;
-      const maxScroll = Math.max(
-        0,
-        viewport.scrollHeight - viewport.clientHeight,
-      );
-      if (maxScroll < 1) return true;
-      // We already handled (or will handle) on the capture listener
-      if (ev.defaultPrevented) return false;
-      return false;
-    });
 
     const onData = window.vefg.on("terminal:data", (payload) => {
       if (typeof payload === "string") {
@@ -419,8 +474,10 @@ export default function TerminalPane({
         wheelFrameRafRef.current = null;
       }
       wheelFrameDeltaRef.current = 0;
-      if (viewportEl) {
-        viewportEl.removeEventListener("wheel", onViewportWheel, true);
+      wheelFrameEventRef.current = null;
+      tuiWheelRemainderRef.current = 0;
+      if (terminalEl) {
+        terminalEl.removeEventListener("wheel", onTerminalWheel, true);
       }
       onData();
       onExit();

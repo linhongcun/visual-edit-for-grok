@@ -8,6 +8,12 @@ const { spawn } = require("child_process");
 const ROOT = path.resolve(__dirname, "..");
 const FAKE_GROK = path.join(__dirname, "fixtures", "fake-grok.js");
 
+function countSgrWheelReports(filePath) {
+  if (!fs.existsSync(filePath)) return 0;
+  const input = fs.readFileSync(filePath).toString("latin1");
+  return (input.match(/\x1b\[<6[45];\d+;\d+M/g) || []).length;
+}
+
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -163,8 +169,55 @@ async function dispatchArrow(client, key, modifiers = 0) {
   });
 }
 
+async function assertTuiWheelAcceleration(shellClient, inputLog) {
+  await waitFor(
+    () => fs.existsSync(inputLog),
+    "fake Grok TUI did not enter alternate screen",
+  );
+  await shellClient.evaluate(
+    `new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))`,
+  );
+  await delay(180);
+  const terminalPoint = await shellClient.evaluate(`(() => {
+    const rect = document.querySelector('.xterm-screen')?.getBoundingClientRect();
+    return rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null;
+  })()`);
+  assert.ok(terminalPoint, "xterm screen was unavailable for wheel smoke");
+
+  const dispatchTuiWheel = async (deltaY) => {
+    fs.writeFileSync(inputLog, "");
+    await shellClient.evaluate(`(() => {
+      const screen = document.querySelector('.xterm-screen');
+      if (!screen) return false;
+      return screen.dispatchEvent(new WheelEvent('wheel', {
+        bubbles: true,
+        cancelable: true,
+        deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+        deltaX: 0,
+        deltaY: ${JSON.stringify(deltaY)},
+        clientX: ${JSON.stringify(terminalPoint.x)},
+        clientY: ${JSON.stringify(terminalPoint.y)}
+      }));
+    })()`);
+    await delay(220);
+    return countSgrWheelReports(inputLog);
+  };
+  const slowReports = await dispatchTuiWheel(16);
+  const fastReports = await dispatchTuiWheel(60);
+  assert.ok(
+    slowReports >= 1,
+    `slow TUI trackpad glide was lost (${slowReports} reports)`,
+  );
+  assert.ok(
+    fastReports >= slowReports * 4,
+    `fast TUI flick did not accelerate (${slowReports} -> ${fastReports})`,
+  );
+  return { slowReports, fastReports };
+}
+
 async function run() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "vefg-electron-smoke-"));
+  const fakeGrokInputLog = path.join(tmp, "fake-grok-input.bin");
   const projectDir = path.join(tmp, "project with spaces");
   fs.mkdirSync(projectDir, { recursive: true });
 
@@ -208,6 +261,7 @@ async function run() {
       env: {
         ...process.env,
         GROK_PATH: FAKE_GROK,
+        VEFG_FAKE_GROK_INPUT_LOG: fakeGrokInputLog,
         HOME: tmp,
         LANG: "en_US.UTF-8",
         NODE_OPTIONS: "",
@@ -262,6 +316,20 @@ async function run() {
       )) >= 140,
       "preview URL input was squeezed by neighboring controls",
     );
+    if (process.env.VEFG_SCROLL_SMOKE_ONLY === "1") {
+      const grokStart = await shellClient.evaluate(
+        `(async () => window.vefg.terminalLaunchGrok())()`,
+      );
+      assert.strictEqual(grokStart.mode, "grok");
+      const counts = await assertTuiWheelAcceleration(
+        shellClient,
+        fakeGrokInputLog,
+      );
+      console.log(
+        `ok  - ${packagedBinary ? "Packaged" : "Electron"} Grok TUI wheel ${counts.slowReports} -> ${counts.fastReports}`,
+      );
+      return;
+    }
     const unsafeLinkResult = await shellClient.evaluate(`(async () => {
       try {
         await window.vefg.openExternal("file:///etc/passwd");
@@ -617,6 +685,39 @@ async function run() {
         : null;
     }, "preview Forward did not synchronize URL");
 
+    await shellClient.evaluate(
+      `(async () => window.vefg.terminalWrite({data:"repeat 240 print -r -- wheel-smoke-line\\r"}))()`,
+    );
+    await waitFor(
+      () =>
+        shellClient.evaluate(`(() => {
+          const viewport = document.querySelector('.xterm-viewport');
+          return viewport && viewport.scrollHeight - viewport.clientHeight > 1000;
+        })()`),
+      "terminal scrollback was not populated",
+    );
+    const scrollbackTravel = await shellClient.evaluate(`(async () => {
+      const viewport = document.querySelector('.xterm-viewport');
+      const screen = document.querySelector('.xterm-screen');
+      if (!viewport || !screen) return 0;
+      viewport.scrollTop = 0;
+      const rect = screen.getBoundingClientRect();
+      screen.dispatchEvent(new WheelEvent('wheel', {
+        bubbles: true,
+        cancelable: true,
+        deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+        deltaY: 30,
+        clientX: rect.left + rect.width / 2,
+        clientY: rect.top + rect.height / 2
+      }));
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return viewport.scrollTop;
+    })()`);
+    assert.ok(
+      scrollbackTravel >= 100,
+      `wheel over xterm screen did not accelerate scrollback (${scrollbackTravel}px)`,
+    );
+
     const grokStart = await shellClient.evaluate(
       `(async () => window.vefg.terminalLaunchGrok())()`,
     );
@@ -629,6 +730,8 @@ async function run() {
       `(async () => window.vefg.terminalLaunchGrok())()`,
     );
     assert.strictEqual(duplicate.alreadyRunning, true);
+
+    await assertTuiWheelAcceleration(shellClient, fakeGrokInputLog);
 
     // Preview-focused global shortcuts: Cmd+Shift on macOS, Ctrl+Shift elsewhere.
     previewClient.close();
@@ -937,6 +1040,7 @@ async function run() {
       env: {
         ...process.env,
         GROK_PATH: FAKE_GROK,
+        VEFG_FAKE_GROK_INPUT_LOG: fakeGrokInputLog,
         HOME: tmp,
         LANG: "en_US.UTF-8",
         NODE_OPTIONS: "",

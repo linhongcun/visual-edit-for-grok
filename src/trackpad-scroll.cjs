@@ -69,7 +69,33 @@ function trackpadScrollPixelsFromFrame(frameDeltaY) {
   return frameDeltaY * gain;
 }
 
+/**
+ * Convert a precision-trackpad frame into terminal mouse-wheel impulses.
+ *
+ * Full-screen TUIs commonly enable mouse reporting in the alternate buffer.
+ * The terminal protocol carries wheel direction, but not the DOM delta
+ * magnitude, so xterm normally turns both a slow glide and a fast flick into
+ * one identical wheel report. The caller accumulates the fractional result
+ * across frames and forwards each whole impulse through xterm.
+ *
+ * @param {number} frameDeltaY sum of pixel-mode deltaY in this frame
+ * @param {number} rowPx rendered terminal row height
+ * @returns {number} signed, fractional wheel impulses (capped per frame)
+ */
+function trackpadTuiWheelImpulseFromFrame(frameDeltaY, rowPx) {
+  if (!Number.isFinite(frameDeltaY) || frameDeltaY === 0) return 0;
+  const direction = Math.sign(frameDeltaY);
+  const abs = Math.abs(frameDeltaY);
+  const row = Math.max(8, Math.min(64, Number(rowPx) || 14));
+  const baseTicks = abs / row;
+  const t = Math.min(1, abs / (row * 4));
+  const ease = t * t * (3 - 2 * t);
+  const gain = 1 + 5 * ease;
+  return direction * Math.min(12, baseTicks * gain);
+}
+
 module.exports = {
   trackpadScrollPixels,
   trackpadScrollPixelsFromFrame,
+  trackpadTuiWheelImpulseFromFrame,
 };

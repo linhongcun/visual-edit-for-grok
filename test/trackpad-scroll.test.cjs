@@ -5,11 +5,13 @@ const assert = require("assert");
 const {
   trackpadScrollPixels,
   trackpadScrollPixelsFromFrame,
+  trackpadTuiWheelImpulseFromFrame,
 } = require("../src/trackpad-scroll.cjs");
 
 function testZeroDelta() {
   assert.strictEqual(trackpadScrollPixels(0, 0, 14, 400, 16), 0);
   assert.strictEqual(trackpadScrollPixelsFromFrame(0), 0);
+  assert.strictEqual(trackpadTuiWheelImpulseFromFrame(0, 14), 0);
 }
 
 function testSlowIsUsableButNotHuge() {
@@ -42,6 +44,23 @@ function testFrameBatchBoostsFlicks() {
   assert.ok(flickFrame > 800, "a strong flick frame should move a lot of viewport");
 }
 
+function testTuiFlickCreatesMoreWheelReportsThanGlide() {
+  const glide = Math.abs(trackpadTuiWheelImpulseFromFrame(12, 14));
+  const flick = Math.abs(trackpadTuiWheelImpulseFromFrame(60, 14));
+  assert.ok(glide >= 1 && glide < 3, `glide impulse unexpected: ${glide}`);
+  assert.ok(
+    flick >= glide * 4,
+    `flick impulse (${flick}) should clearly beat glide (${glide})`,
+  );
+}
+
+function testTuiWheelReportsAreDirectionalAndCapped() {
+  const up = trackpadTuiWheelImpulseFromFrame(-600, 14);
+  const down = trackpadTuiWheelImpulseFromFrame(600, 14);
+  assert.strictEqual(up, -12);
+  assert.strictEqual(down, 12);
+}
+
 function testDirectionPreserved() {
   const up = trackpadScrollPixels(-15, 0, 14, 400, 8);
   const down = trackpadScrollPixels(15, 0, 14, 400, 8);
@@ -62,6 +81,8 @@ function run() {
     testSlowIsUsableButNotHuge,
     testFastFlickMuchFasterThanSlow,
     testFrameBatchBoostsFlicks,
+    testTuiFlickCreatesMoreWheelReportsThanGlide,
+    testTuiWheelReportsAreDirectionalAndCapped,
     testDirectionPreserved,
     testLineAndPageModes,
   ];
