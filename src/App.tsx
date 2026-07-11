@@ -193,6 +193,29 @@ export default function App() {
     activeTermIdRef.current = activeTermId;
   }, [activeTermId]);
 
+  /**
+   * Bind Folder / Start Grok / status pills to the *active* tab only.
+   * Must fully replace prior tab's Grok state (no sticky "已请求启动").
+   */
+  function applyActiveTabUi(tab: TermTab | undefined | null) {
+    if (!tab) {
+      setProjectCwd("");
+      setTerminalAlive(false);
+      setGrokState("idle");
+      return;
+    }
+    setProjectCwd(tab.cwd || "");
+    const shellAlive = Boolean(tab.shellAlive);
+    setTerminalAlive(shellAlive);
+    if (tab.grokRunning) {
+      setGrokState("launch-requested");
+    } else if (shellAlive) {
+      setGrokState("idle");
+    } else {
+      setGrokState("exited");
+    }
+  }
+
   function applyTerminalSessions(payload: unknown) {
     const p = payload as {
       sessions?: TermTab[];
@@ -211,15 +234,7 @@ export default function App() {
     setActiveTermId(nextActive);
     activeTermIdRef.current = nextActive;
     const active = sessions.find((s) => s.id === nextActive);
-    if (active) {
-      setProjectCwd(active.cwd || "");
-      setTerminalAlive(Boolean(active.shellAlive));
-      if (active.grokRunning) {
-        setGrokState((cur) => (cur === "ready" ? "ready" : "launch-requested"));
-      } else if (!active.shellAlive) {
-        setGrokState((cur) => (cur === "idle" ? "idle" : "exited"));
-      }
-    }
+    applyActiveTabUi(active || null);
   }
 
   useEffect(() => {
@@ -313,8 +328,8 @@ export default function App() {
     if (typeof shellAlive === "boolean") setTerminalAlive(shellAlive);
 
     // Keep shell-alive separate from Grok readiness. "running" / launch-requested
-    // never promote to ready unless grokReady/readiness is explicitly ready
-    // (mirrors electron/runtime-policy classifyGrokUiState).
+    // never promote to ready unless grokReady/readiness is explicitly ready.
+    // When grokRunning is explicitly false, clear sticky launch state (active tab).
     setGrokState((current) => {
       const raw = String(status.grokState || "").toLowerCase();
       if (
@@ -336,10 +351,22 @@ export default function App() {
       }
       if (raw === "exited" || raw === "stopped") return "exited";
       if (raw === "idle" || raw === "not-started") return "idle";
+      if (status.grokRunning === false && status.grokLaunchRequested !== true) {
+        return shellAlive === false ? "exited" : "idle";
+      }
       if (shellAlive === false) {
         return current === "idle" ? "idle" : "exited";
       }
-      return current === "ready" ? "unknown" : current;
+      // Sparse update with no Grok signal: do not keep another tab's "requested"
+      if (
+        status.grokRunning == null &&
+        status.grokLaunchRequested == null &&
+        !status.grokState &&
+        status.grokReady == null
+      ) {
+        return current;
+      }
+      return "idle";
     });
   }
 

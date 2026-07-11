@@ -7,6 +7,7 @@ const {
   canStartCapture,
   mayStartCaptureAction,
   classifyGrokUiState,
+  resolveActiveTabUiState,
   validateAimEvent,
   normalizeViewport,
   stampSelectionContext,
@@ -589,6 +590,35 @@ function testClassifyGrokUiStateNeverPromotesRequestedToReady() {
     classifyGrokUiState({ shellAlive: false, current: "idle" }),
     "idle",
   );
+  // Explicit grok off while shell lives → idle (not sticky previous)
+  assert.strictEqual(
+    classifyGrokUiState({
+      shellAlive: true,
+      grokRunning: false,
+      current: "launch-requested",
+    }),
+    "idle",
+  );
+}
+
+function testResolveActiveTabUiStateNeverStickyAcrossTabs() {
+  assert.deepStrictEqual(
+    resolveActiveTabUiState({ shellAlive: true, grokRunning: true }),
+    { shellAlive: true, grokState: "launch-requested" },
+  );
+  // Switch to shell-only tab: must clear Grok button state
+  assert.deepStrictEqual(
+    resolveActiveTabUiState({ shellAlive: true, grokRunning: false }),
+    { shellAlive: true, grokState: "idle" },
+  );
+  assert.deepStrictEqual(
+    resolveActiveTabUiState({ shellAlive: false, grokRunning: false }),
+    { shellAlive: false, grokState: "exited" },
+  );
+  assert.deepStrictEqual(resolveActiveTabUiState({}), {
+    shellAlive: false,
+    grokState: "exited",
+  });
 }
 
 function testWorkspaceLayoutSplitLeavesRoomForPreview() {
@@ -640,6 +670,7 @@ function run() {
     testMayStartCaptureActionBusy,
     testMayStartCaptureActionResendNeedsCapture,
     testClassifyGrokUiStateNeverPromotesRequestedToReady,
+    testResolveActiveTabUiStateNeverStickyAcrossTabs,
     testAimEventRequiresActivePickMode,
     testAimEventRequiresIdleCapture,
     testAimEventAcceptsCurrentTrustedDocument,

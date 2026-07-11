@@ -90,10 +90,38 @@ function classifyGrokUiState(input = {}) {
   }
   if (raw === "exited" || raw === "stopped") return "exited";
   if (raw === "idle" || raw === "not-started") return "idle";
+  // Explicit "Grok is not running" (tab switch / status for shell-only session)
+  if (input.grokRunning === false && input.grokLaunchRequested !== true) {
+    return shellAlive ? "idle" : "exited";
+  }
   if (!shellAlive) {
     return input.current === "idle" || !input.current ? "idle" : "exited";
   }
   return "unknown";
+}
+
+/**
+ * UI shell/Grok flags for the *active* terminal tab only.
+ * Never inherits another tab's Grok state (prevents global-looking buttons).
+ *
+ * @param {{
+ *   shellAlive?: boolean,
+ *   alive?: boolean,
+ *   grokRunning?: boolean,
+ *   mode?: string | null,
+ * }} tab
+ * @returns {{ shellAlive: boolean, grokState: "idle"|"launch-requested"|"exited" }}
+ */
+function resolveActiveTabUiState(tab = {}) {
+  const shellAlive = Boolean(tab.shellAlive ?? tab.alive);
+  const grokRunning = Boolean(tab.grokRunning);
+  if (grokRunning) {
+    return { shellAlive: true, grokState: "launch-requested" };
+  }
+  if (shellAlive) {
+    return { shellAlive: true, grokState: "idle" };
+  }
+  return { shellAlive: false, grokState: "exited" };
 }
 
 function firstDefined(...values) {
@@ -940,6 +968,7 @@ module.exports = {
   canStartCapture,
   mayStartCaptureAction,
   classifyGrokUiState,
+  resolveActiveTabUiState,
   validateAimEvent,
   normalizeViewport,
   stampSelectionContext,

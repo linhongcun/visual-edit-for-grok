@@ -2,6 +2,14 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.5.3] — 2026-07-11
+
+### Per-tab Grok / shell UI state
+
+- Switching terminal tabs fully resets Folder / Start Grok / status to the **active** tab
+- Shell-only tabs no longer stick on “Grok requested” from another tab
+- Pure `resolveActiveTabUiState` + unit tests
+
 ## [0.5.2] — 2026-07-11
 
 ### Pane-scoped controls
