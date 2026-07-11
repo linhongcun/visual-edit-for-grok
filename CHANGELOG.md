@@ -2,6 +2,14 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.4.3] — 2026-07-11
+
+### Terminal CJK / table border alignment
+
+- Enable `@xterm/addon-unicode11` so East Asian double-width matches modern TUI layout
+- Force UTF-8 `LANG` / `LC_ALL` / `LC_CTYPE` in the PTY env (avoids ASCII-locale width bugs)
+- `customGlyphs` for cleaner box-drawing; drop proportional CJK faces from mono stack
+
 ## [0.4.2] — 2026-07-11
 
 ### Terminal width (wide TUI tables)

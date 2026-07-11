@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import "@xterm/xterm/css/xterm.css";
 
 /** Slightly smaller than 13 so the same pane fits more columns (helps wide CJK tables). */
@@ -9,20 +10,17 @@ const TERM_FONT_SIZE = 12;
 
 /**
  * Prefer mono fonts that measure CJK as double-width consistently.
- * System CJK fallbacks after mono Latin faces.
+ * Keep Latin mono first; avoid proportional CJK faces that skew box-drawing alignment.
  */
 const TERM_FONT_FAMILY = [
-  "SFMono-Regular",
   "Menlo",
+  "SFMono-Regular",
   "Monaco",
   "Consolas",
   "Sarasa Mono SC",
   "Sarasa Term SC",
   "Noto Sans Mono CJK SC",
   "Source Han Mono SC",
-  "PingFang SC",
-  "Hiragino Sans GB",
-  "Microsoft YaHei Mono",
   "ui-monospace",
   "monospace",
 ].join(", ");
@@ -139,9 +137,11 @@ export default function TerminalPane({
       cursorBlink: true,
       fontSize: TERM_FONT_SIZE,
       fontFamily: TERM_FONT_FAMILY,
-      // Tighter metrics → more columns in the same CSS width
-      lineHeight: 1.15,
+      // Integer cell metrics reduce box-drawing drift with CJK double-width cells
+      lineHeight: 1.2,
       letterSpacing: 0,
+      // Draw box-drawing / powerline glyphs on canvas for cleaner table borders
+      customGlyphs: true,
       theme: {
         background: "#0a0c10",
         foreground: "#e8eaef",
@@ -167,12 +167,16 @@ export default function TerminalPane({
       },
       allowProposedApi: true,
       scrollback: 8000,
-      // Prefer wrapping long lines when the TUI emits plain text
       convertEol: false,
+      windowsMode: false,
     });
 
     const fit = new FitAddon();
     term.loadAddon(fit);
+    // Unicode 11 widths match modern TUI / CJK East Asian Width better than default v6
+    const unicode11 = new Unicode11Addon();
+    term.loadAddon(unicode11);
+    term.unicode.activeVersion = "11";
     term.loadAddon(
       new WebLinksAddon((_event, uri) => {
         void window.vefg.openExternal(uri).catch(() => {

@@ -64,6 +64,17 @@ function buildColorfulEnv(base = process.env) {
   env.CLICOLOR = "1";
   env.CLICOLOR_FORCE = "1";
 
+  // Force UTF-8 so Grok / chalk measure CJK width against a Unicode-aware locale.
+  // Misaligned markdown table borders often come from ASCII locale + wide CJK.
+  const utf8 =
+    process.platform === "darwin" || process.platform === "linux"
+      ? "en_US.UTF-8"
+      : "C.UTF-8";
+  if (!env.LANG || !/utf-?8/i.test(env.LANG)) env.LANG = utf8;
+  if (!env.LC_ALL || !/utf-?8/i.test(env.LC_ALL)) env.LC_ALL = utf8;
+  if (!env.LC_CTYPE || !/utf-?8/i.test(env.LC_CTYPE)) env.LC_CTYPE = utf8;
+  env.PYTHONIOENCODING = env.PYTHONIOENCODING || "utf-8";
+
   // Help TUI detectors that key off terminal identity (not Warp-specific)
   if (!env.TERM_PROGRAM || env.TERM_PROGRAM === "Apple_Terminal") {
     env.TERM_PROGRAM = "iTerm.app";
