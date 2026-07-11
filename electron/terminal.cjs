@@ -41,8 +41,9 @@ function quoteForPosixShell(value) {
 /**
  * Build env for the embedded PTY with truecolor / 256-color forced on.
  * @param {NodeJS.ProcessEnv} base
+ * @param {{ cols?: number, rows?: number }} [size]
  */
-function buildColorfulEnv(base = process.env) {
+function buildColorfulEnv(base = process.env, size = {}) {
   const env = { ...base };
 
   // Strip flags that make apps (Grok, chalk, etc.) disable color
@@ -74,6 +75,16 @@ function buildColorfulEnv(base = process.env) {
   if (!env.LC_ALL || !/utf-?8/i.test(env.LC_ALL)) env.LC_ALL = utf8;
   if (!env.LC_CTYPE || !/utf-?8/i.test(env.LC_CTYPE)) env.LC_CTYPE = utf8;
   env.PYTHONIOENCODING = env.PYTHONIOENCODING || "utf-8";
+
+  // Some TUI stacks read COLUMNS/LINES at startup in addition to TIOCGWINSZ.
+  const cols = Number(size.cols);
+  const rows = Number(size.rows);
+  if (Number.isFinite(cols) && cols >= 2) {
+    env.COLUMNS = String(Math.floor(cols));
+  }
+  if (Number.isFinite(rows) && rows >= 1) {
+    env.LINES = String(Math.floor(rows));
+  }
 
   // Help TUI detectors that key off terminal identity (not Warp-specific)
   if (!env.TERM_PROGRAM || env.TERM_PROGRAM === "Apple_Terminal") {
@@ -141,7 +152,10 @@ class TerminalSession {
       cols: this.cols,
       rows: this.rows,
       cwd: this.cwd,
-      env: buildColorfulEnv(process.env),
+      env: buildColorfulEnv(process.env, {
+        cols: this.cols,
+        rows: this.rows,
+      }),
     });
 
     this.pty = child;
@@ -156,6 +170,13 @@ class TerminalSession {
       this.mode = null;
       this.onExit(exitCode ?? 0, signal, mode);
     });
+
+    // Re-assert winsize after spawn (some children snapshot size only once).
+    try {
+      child.resize(this.cols, this.rows);
+    } catch {
+      /* ignore */
+    }
 
     return { cwd: this.cwd, program, mode: this.mode };
   }

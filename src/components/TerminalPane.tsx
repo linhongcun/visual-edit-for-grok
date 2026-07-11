@@ -3,6 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 
 /** Slightly smaller than 13 so the same pane fits more columns (helps wide CJK tables). */
@@ -169,6 +170,8 @@ export default function TerminalPane({
       scrollback: 8000,
       convertEol: false,
       windowsMode: false,
+      // Reduce glyph overlap artifacts that make table borders look “broken”
+      rescaleOverlappingGlyphs: true,
     });
 
     const fit = new FitAddon();
@@ -185,6 +188,20 @@ export default function TerminalPane({
       }),
     );
     term.open(hostRef.current);
+    // WebGL renderer: crisper box-drawing; fall back to canvas if GPU path fails
+    try {
+      const webgl = new WebglAddon();
+      webgl.onContextLoss(() => {
+        try {
+          webgl.dispose();
+        } catch {
+          /* ignore */
+        }
+      });
+      term.loadAddon(webgl);
+    } catch {
+      /* canvas renderer remains */
+    }
     fit.fit();
 
     termRef.current = term;

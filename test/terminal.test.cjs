@@ -39,6 +39,12 @@ function testColorEnvForcesUtf8Locale() {
   assert.ok(/utf-?8/i.test(env.LC_CTYPE), "LC_CTYPE should be UTF-8");
 }
 
+function testColorEnvExportsColumnsLines() {
+  const env = buildColorfulEnv({}, { cols: 120, rows: 40 });
+  assert.strictEqual(env.COLUMNS, "120");
+  assert.strictEqual(env.LINES, "40");
+}
+
 function testShellQuoteRejectsNoData() {
   assert.strictEqual(quoteForPosixShell(""), "''");
   assert.strictEqual(quoteForPosixShell("grok"), "'grok'");
@@ -48,6 +54,7 @@ for (const test of [
   testShellQuoteRoundTripsSpacesAndApostrophe,
   testColorEnvRemovesMonochromeFlags,
   testColorEnvForcesUtf8Locale,
+  testColorEnvExportsColumnsLines,
   testShellQuoteRejectsNoData,
 ]) {
   try {

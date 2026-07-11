@@ -2,6 +2,15 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.4.4] — 2026-07-11
+
+### Terminal size / table rendering (continued)
+
+- Pass `COLUMNS` / `LINES` into the PTY env at spawn (some TUIs ignore ioctl alone)
+- Re-assert `pty.resize` immediately after spawn
+- Optional WebGL renderer + `rescaleOverlappingGlyphs` for cleaner box-drawing
+- Note: Grok-generated CJK markdown tables may still pad unevenly; empty space to the right of a short table is normal
+
 ## [0.4.3] — 2026-07-11
 
 ### Terminal CJK / table border alignment
