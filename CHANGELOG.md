@@ -2,6 +2,14 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.6.2] — 2026-07-11
+
+### Trackpad scroll (macOS)
+
+- Custom wheel handler: pixel deltas → high-gain line scroll, rAF-coalesced flicks
+- Drop WebGL renderer for the CLI (canvas is snappier with multi-tab + CJK)
+- Keep elevated `scrollSensitivity` as fallback
+
 ## [0.6.1] — 2026-07-11
 
 ### Terminal scroll performance
