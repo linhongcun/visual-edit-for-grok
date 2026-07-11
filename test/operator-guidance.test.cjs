@@ -97,13 +97,20 @@ function testBuildActionableZhHasNextStep() {
 }
 
 function testShouldConfirmQuit() {
-  assert.strictEqual(shouldConfirmQuit({ sessionAlive: true }), true);
-  assert.strictEqual(shouldConfirmQuit({ shellAlive: true }), true);
+  // Shell-only / bare PTY: no dialog
+  assert.strictEqual(shouldConfirmQuit({ sessionAlive: true }), false);
+  assert.strictEqual(shouldConfirmQuit({ shellAlive: true }), false);
+  assert.strictEqual(shouldConfirmQuit({ terminalAlive: true }), false);
+  // Grok running: confirm
   assert.strictEqual(shouldConfirmQuit({ grokRunning: true }), true);
-  assert.strictEqual(shouldConfirmQuit({ terminalAlive: true }), true);
+  assert.strictEqual(shouldConfirmQuit({ anyGrokRunning: true }), true);
   assert.strictEqual(shouldConfirmQuit({}), false);
   assert.strictEqual(
-    shouldConfirmQuit({ sessionAlive: false, grokRunning: false }),
+    shouldConfirmQuit({
+      sessionAlive: true,
+      shellAlive: true,
+      grokRunning: false,
+    }),
     false,
   );
 }

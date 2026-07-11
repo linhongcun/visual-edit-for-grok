@@ -181,21 +181,20 @@ function buildActionableError(input = {}) {
 
 /**
  * Whether closing the app should ask the user first.
+ * Only when embedded **Grok** is running — a bare shell/PTY is not worth a dialog.
+ *
  * @param {{
  *   sessionAlive?: boolean,
  *   shellAlive?: boolean,
  *   terminalAlive?: boolean,
  *   grokRunning?: boolean,
+ *   anyGrokRunning?: boolean,
  * }} state
  * @returns {boolean}
  */
 function shouldConfirmQuit(state = {}) {
-  return Boolean(
-    state.sessionAlive ||
-      state.shellAlive ||
-      state.terminalAlive ||
-      state.grokRunning,
-  );
+  // Prefer explicit Grok liveness. Legacy shell-only flags must not block quit.
+  return Boolean(state.grokRunning || state.anyGrokRunning);
 }
 
 /**

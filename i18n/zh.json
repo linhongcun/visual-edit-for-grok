@@ -196,8 +196,8 @@
   "error.next.url": "下一步：使用以 http:// 或 https:// 开头的地址。",
   "error.next.capture": "下一步：等页面加载完成后再瞄准或取景。",
   "error.next.generic": "下一步：查看状态条，然后重试上一步操作。",
-  "quit.message": "结束内嵌终端并退出？",
-  "quit.detail": "关闭 Capture 会结束左侧终端会话（若 Grok 在运行也会退出）。Grok 中未完成的工作可能丢失。",
+  "quit.message": "Grok 正在运行，确定退出？",
+  "quit.detail": "关闭 Capture 会结束所有终端标签里的 Grok，未完成的工作可能丢失。",
   "quit.leave": "退出",
   "quit.stay": "继续使用"
 }

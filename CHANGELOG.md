@@ -2,6 +2,14 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.5.1] — 2026-07-11
+
+### Quit confirm only when Grok is running
+
+- Closing the app no longer prompts for a bare shell/PTY
+- Dialog appears only if at least one terminal tab has **Grok** running
+- Copy updated to match (EN / 中文)
+
 ## [0.5.0] — 2026-07-11
 
 ### Multi-terminal tabs

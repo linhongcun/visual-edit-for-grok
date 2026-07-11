@@ -196,8 +196,8 @@
   "error.next.url": "Next: use an address starting with http:// or https://.",
   "error.next.capture": "Next: wait for the page to finish loading, then Aim or Frame again.",
   "error.next.generic": "Next: check the status strip, then retry the last action.",
-  "quit.message": "Stop the embedded terminal and quit?",
-  "quit.detail": "Closing Capture ends the left terminal session, including Grok if it is running. Unsaved Grok work may be lost.",
+  "quit.message": "Quit while Grok is running?",
+  "quit.detail": "Closing Capture stops Grok in every terminal tab. Unfinished work in Grok may be lost.",
   "quit.leave": "Quit",
   "quit.stay": "Keep open"
 }

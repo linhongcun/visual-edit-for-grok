@@ -25,7 +25,6 @@ const {
   nextActiveAfterClose,
   normalizeSessionList,
   sessionsSnapshot,
-  anySessionAlive,
 } = require("./terminal-hub.cjs");
 const {
   loadSettings,
@@ -191,10 +190,6 @@ function grokBinaryExists() {
 let isQuitting = false;
 let quitDialogOpen = false;
 
-function sessionAliveForQuit() {
-  return anySessionAlive(listTerminalRuntime());
-}
-
 /**
  * @param {import('electron').Event} event
  * @param {"close"|"quit"} reason
@@ -202,13 +197,9 @@ function sessionAliveForQuit() {
 function requestQuitConfirmation(event, reason = "close") {
   if (isQuitting) return false;
   const runtime = listTerminalRuntime();
-  if (
-    !shouldConfirmQuit({
-      sessionAlive: anySessionAlive(runtime),
-      shellAlive: runtime.some((s) => s.shellAlive),
-      grokRunning: runtime.some((s) => s.grokRunning),
-    })
-  ) {
+  const grokRunning = runtime.some((s) => s.grokRunning);
+  // Shell-only tabs: quit immediately. Confirm only when Grok is actually up.
+  if (!shouldConfirmQuit({ grokRunning, anyGrokRunning: grokRunning })) {
     return false;
   }
   event.preventDefault();
