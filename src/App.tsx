@@ -146,6 +146,8 @@ export default function App() {
     id: string;
     cwd: string;
     label: string;
+    /** Disambiguated when multiple tabs share the same basename */
+    displayLabel?: string;
     shellAlive?: boolean;
     grokRunning?: boolean;
     mode?: string | null;
@@ -195,7 +197,7 @@ export default function App() {
 
   /**
    * Bind Folder / Start Grok / status pills to the *active* tab only.
-   * Must fully replace prior tab's Grok state (no sticky "已请求启动").
+   * Mirrors electron/runtime-policy resolveActiveTabUiState (no sticky Grok).
    */
   function applyActiveTabUi(tab: TermTab | undefined | null) {
     if (!tab) {
@@ -205,6 +207,7 @@ export default function App() {
       return;
     }
     setProjectCwd(tab.cwd || "");
+    // Same policy as resolveActiveTabUiState({ shellAlive, grokRunning })
     const shellAlive = Boolean(tab.shellAlive);
     setTerminalAlive(shellAlive);
     if (tab.grokRunning) {
@@ -897,7 +900,12 @@ export default function App() {
       return;
     }
     try {
-      const snap = await window.vefg.terminalClose(sessionId);
+      const snap = (await window.vefg.terminalClose(sessionId)) as {
+        canceled?: boolean;
+        sessions?: TermTab[];
+        activeId?: string | null;
+      };
+      if (snap.canceled) return;
       applyTerminalSessions(snap);
       requestAnimationFrame(() => requestTerminalFit());
     } catch (err) {
@@ -1025,8 +1033,10 @@ export default function App() {
     ? { width: "100%" as const, flex: "1 1 auto" as const }
     : { width: terminalWidth };
 
+  const activeTabMeta = termTabs.find((t) => t.id === activeTermId);
   const activeTabLabel =
-    termTabs.find((t) => t.id === activeTermId)?.label ||
+    activeTabMeta?.displayLabel ||
+    activeTabMeta?.label ||
     (projectCwd ? projectCwd.split(/[/\\]/).pop() : "") ||
     tr("pane.terminal");
 
@@ -1547,7 +1557,7 @@ export default function App() {
                       onClick={() => void onSelectTerminal(tab.id)}
                     >
                       <span className="term-tab-label">
-                        {tab.label || "Terminal"}
+                        {tab.displayLabel || tab.label || "Terminal"}
                       </span>
                       {tab.grokRunning ? (
                         <span className="term-tab-badge">Grok</span>
@@ -1557,8 +1567,14 @@ export default function App() {
                       <button
                         type="button"
                         className="term-tab-close"
-                        title={tr("term.closeTitle")}
-                        aria-label={tr("term.closeAria", { name: tab.label })}
+                        title={
+                          tab.grokRunning
+                            ? tr("term.closeGrokTitle")
+                            : tr("term.closeTitle")
+                        }
+                        aria-label={tr("term.closeAria", {
+                          name: tab.displayLabel || tab.label,
+                        })}
                         onClick={(e) => {
                           e.stopPropagation();
                           void onCloseTerminal(tab.id);

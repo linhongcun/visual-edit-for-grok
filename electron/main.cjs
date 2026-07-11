@@ -25,6 +25,7 @@ const {
   nextActiveAfterClose,
   normalizeSessionList,
   sessionsSnapshot,
+  shouldConfirmCloseTab,
 } = require("./terminal-hub.cjs");
 const {
   loadSettings,
@@ -1966,17 +1967,41 @@ function setActiveTerminal(sessionId) {
   return broadcastTerminalSessions();
 }
 
-function closeTerminalSlot(sessionId) {
+/**
+ * @param {string} sessionId
+ * @param {{ force?: boolean }} [opts]
+ */
+async function closeTerminalSlot(sessionId, opts = {}) {
   if (!sessionId || !terminalSlots.has(sessionId)) {
-    return broadcastTerminalSessions();
+    return { canceled: false, ...broadcastTerminalSessions() };
   }
   if (terminalSlots.size <= 1) {
     throw new Error(
       tr("term.keepOne") || "Keep at least one terminal tab.",
     );
   }
-  const ordered = Array.from(terminalSlots.keys());
   const slot = terminalSlots.get(sessionId);
+  const grokRunning = Boolean(slot?.pty?.isGrokAlive());
+  if (!opts.force && shouldConfirmCloseTab({ grokRunning })) {
+    const win =
+      mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+    const confirmation = await dialog.showMessageBox(win, {
+      type: "warning",
+      title: tr("term.closeGrokTitle"),
+      message: tr("term.closeGrokMessage"),
+      detail: tr("term.closeGrokDetail", {
+        tab: slot?.meta?.label || labelFromCwd(slot?.meta?.cwd) || sessionId,
+      }),
+      buttons: [tr("term.closeGrokConfirm"), tr("term.closeGrokCancel")],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+    });
+    if (confirmation.response !== 0) {
+      return { canceled: true, ...broadcastTerminalSessions() };
+    }
+  }
+  const ordered = Array.from(terminalSlots.keys());
   try {
     slot?.pty.dispose();
   } catch {
@@ -1990,7 +2015,7 @@ function closeTerminalSlot(sessionId) {
   );
   syncProjectCwdFromActive();
   persistTerminalSessions(true);
-  return broadcastTerminalSessions();
+  return { canceled: false, ...broadcastTerminalSessions() };
 }
 
 function seedTerminalsFromSettings(s) {
@@ -2417,7 +2442,7 @@ function registerIpc() {
   });
 
   ipcMain.handle("terminal:close", async (_e, sessionId) => {
-    return closeTerminalSlot(sessionId);
+    return closeTerminalSlot(sessionId, { force: false });
   });
 
   ipcMain.handle("terminal:set-active", async (_e, sessionId) => {

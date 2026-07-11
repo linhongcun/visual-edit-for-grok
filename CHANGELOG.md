@@ -2,6 +2,15 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.5.4] — 2026-07-11
+
+### Multi-terminal operator consistency
+
+1. **Active-tab UI single-source** — tab switch still fully resets shell/Grok/cwd via `resolveActiveTabUiState` policy (no sticky Start Grok).
+2. **Distinct tab labels** — same folder basename → `parent/name` or short id suffix (`displayLabelForTab` / `withDisplayLabels`).
+3. **Close with Grok confirms** — closing a tab where Grok is running asks first; cancel keeps the tab; shell-only close is one click.
+4. **Tests** — terminal-hub fixtures for labels + close-confirm; runtime-policy active-tab resolve.
+
 ## [0.5.3] — 2026-07-11
 
 ### Per-tab Grok / shell UI state

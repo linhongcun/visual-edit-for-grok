@@ -138,7 +138,14 @@ export interface VefgApi {
     maxSessions?: number;
   }>;
   terminalClose: (sessionId: string) => Promise<{
-    sessions: Array<{ id: string; cwd: string; label: string }>;
+    canceled?: boolean;
+    sessions: Array<{
+      id: string;
+      cwd: string;
+      label: string;
+      displayLabel?: string;
+      grokRunning?: boolean;
+    }>;
     activeId: string | null;
   }>;
   terminalSetActive: (sessionId: string) => Promise<{

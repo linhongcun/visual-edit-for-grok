@@ -121,6 +121,76 @@ function normalizeSessionList(raw, fallbackCwd = "") {
 }
 
 /**
+ * Parent/base path segments for disambiguation (no path module for renderer parity).
+ * @param {string} cwd
+ * @returns {string[]}
+ */
+function pathSegments(cwd) {
+  if (typeof cwd !== "string" || !cwd.trim()) return [];
+  return cwd.trim().split(/[/\\]+/).filter(Boolean);
+}
+
+/**
+ * Display label for one tab given the full list (disambiguate same basename).
+ * @param {{ id?: string, cwd?: string, label?: string }} tab
+ * @param {Array<{ id?: string, cwd?: string, label?: string }>} allTabs
+ * @returns {string}
+ */
+function displayLabelForTab(tab, allTabs) {
+  const list = Array.isArray(allTabs) ? allTabs : [];
+  const base =
+    (typeof tab?.label === "string" && tab.label.trim()) ||
+    labelFromCwd(tab?.cwd) ||
+    "Terminal";
+
+  const sameBase = list.filter((other) => {
+    const otherBase =
+      (typeof other?.label === "string" && other.label.trim()) ||
+      labelFromCwd(other?.cwd) ||
+      "Terminal";
+    return otherBase === base;
+  });
+  if (sameBase.length <= 1) return base;
+
+  const segs = pathSegments(tab?.cwd || "");
+  if (segs.length >= 2) {
+    const candidate = `${segs[segs.length - 2]}/${segs[segs.length - 1]}`;
+    const sameParent = list.filter((other) => {
+      const o = pathSegments(other?.cwd || "");
+      if (o.length < 2) return false;
+      return `${o[o.length - 2]}/${o[o.length - 1]}` === candidate;
+    });
+    if (sameParent.length <= 1) return candidate;
+  }
+
+  const id = typeof tab?.id === "string" ? tab.id : "";
+  const short = id.slice(-4) || "tab";
+  return `${base} · ${short}`;
+}
+
+/**
+ * Attach unique `displayLabel` for every session in the list.
+ * @param {Array<{ id: string, cwd?: string, label?: string }>} sessions
+ * @returns {Array<{ id: string, cwd?: string, label?: string, displayLabel: string }>}
+ */
+function withDisplayLabels(sessions) {
+  const list = Array.isArray(sessions) ? sessions : [];
+  return list.map((s) => ({
+    ...s,
+    displayLabel: displayLabelForTab(s, list),
+  }));
+}
+
+/**
+ * Closing a tab that has Grok running should confirm first.
+ * @param {{ grokRunning?: boolean }} tab
+ * @returns {boolean}
+ */
+function shouldConfirmCloseTab(tab = {}) {
+  return Boolean(tab.grokRunning);
+}
+
+/**
  * Snapshot for renderer / get-state.
  * @param {Array<{ id: string, cwd: string, label: string, createdAt?: number, shellAlive?: boolean, grokRunning?: boolean, mode?: string | null }>} sessions
  * @param {string | null} activeId
@@ -131,8 +201,8 @@ function sessionsSnapshot(sessions, activeId) {
     activeId && list.some((s) => s.id === activeId)
       ? activeId
       : list[0]?.id || null;
-  return {
-    sessions: list.map((s) => ({
+  const mapped = withDisplayLabels(
+    list.map((s) => ({
       id: s.id,
       cwd: s.cwd || "",
       label: s.label || labelFromCwd(s.cwd),
@@ -141,6 +211,9 @@ function sessionsSnapshot(sessions, activeId) {
       grokRunning: Boolean(s.grokRunning),
       mode: s.mode || null,
     })),
+  );
+  return {
+    sessions: mapped,
     activeId: active,
     maxSessions: MAX_TERMINAL_SESSIONS,
   };
@@ -159,6 +232,10 @@ function anySessionAlive(sessions) {
 module.exports = {
   MAX_TERMINAL_SESSIONS,
   labelFromCwd,
+  pathSegments,
+  displayLabelForTab,
+  withDisplayLabels,
+  shouldConfirmCloseTab,
   makeSessionId,
   createSessionMeta,
   canCreateSession,

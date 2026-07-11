@@ -11,6 +11,9 @@ const {
   normalizeSessionList,
   sessionsSnapshot,
   anySessionAlive,
+  displayLabelForTab,
+  withDisplayLabels,
+  shouldConfirmCloseTab,
 } = require("../electron/terminal-hub.cjs");
 
 function testLabelFromCwd() {
@@ -89,6 +92,7 @@ function testSessionsSnapshotAndAlive() {
   assert.strictEqual(snap.activeId, "t2");
   assert.strictEqual(snap.sessions[1].grokRunning, true);
   assert.strictEqual(snap.maxSessions, MAX_TERMINAL_SESSIONS);
+  assert.ok(snap.sessions[0].displayLabel);
   assert.strictEqual(
     anySessionAlive([
       { shellAlive: false, grokRunning: false },
@@ -99,6 +103,48 @@ function testSessionsSnapshotAndAlive() {
   assert.strictEqual(anySessionAlive([{ shellAlive: false }]), false);
 }
 
+function testDisambiguateSameBasename() {
+  const tabs = [
+    { id: "term-aaaa1111", cwd: "/Users/me/projects/hongcunlin", label: "hongcunlin" },
+    { id: "term-bbbb2222", cwd: "/Users/me/other/hongcunlin", label: "hongcunlin" },
+  ];
+  const a = displayLabelForTab(tabs[0], tabs);
+  const b = displayLabelForTab(tabs[1], tabs);
+  assert.notStrictEqual(a, b, "same basename must produce distinct labels");
+  assert.ok(a.includes("hongcunlin"));
+  assert.ok(b.includes("hongcunlin"));
+  // Prefer parent/name form when parents differ
+  assert.ok(
+    a.includes("projects/") || a.includes(" · "),
+    `expected disambiguated a, got ${a}`,
+  );
+  assert.ok(
+    b.includes("other/") || b.includes(" · "),
+    `expected disambiguated b, got ${b}`,
+  );
+
+  const unique = withDisplayLabels([
+    { id: "only", cwd: "/tmp/solo", label: "solo" },
+  ]);
+  assert.strictEqual(unique[0].displayLabel, "solo");
+
+  const sameParent = withDisplayLabels([
+    { id: "term-xxxx1111", cwd: "/Users/me/hongcunlin", label: "hongcunlin" },
+    { id: "term-yyyy2222", cwd: "/Users/me/hongcunlin", label: "hongcunlin" },
+  ]);
+  assert.notStrictEqual(
+    sameParent[0].displayLabel,
+    sameParent[1].displayLabel,
+  );
+}
+
+function testShouldConfirmCloseTab() {
+  assert.strictEqual(shouldConfirmCloseTab({ grokRunning: true }), true);
+  assert.strictEqual(shouldConfirmCloseTab({ grokRunning: false }), false);
+  assert.strictEqual(shouldConfirmCloseTab({}), false);
+  assert.strictEqual(shouldConfirmCloseTab({ shellAlive: true }), false);
+}
+
 function run() {
   const tests = [
     testLabelFromCwd,
@@ -107,6 +153,8 @@ function run() {
     testNextActiveAfterClose,
     testNormalizeSessionList,
     testSessionsSnapshotAndAlive,
+    testDisambiguateSameBasename,
+    testShouldConfirmCloseTab,
   ];
   let failed = 0;
   for (const t of tests) {
