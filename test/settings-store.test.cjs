@@ -14,6 +14,10 @@ const {
   SETTINGS_VERSION,
   defaultSettingsPath,
 } = require("../electron/settings-store.cjs");
+const {
+  restoreCoordinatorState,
+  getSessionState,
+} = require("../electron/capture-coordinator.cjs");
 
 function tmpFile() {
   return path.join(
@@ -52,7 +56,7 @@ function testMigratesLegacyDemoDefaultToWelcome() {
     settingsVersion: SETTINGS_VERSION,
     previewUrl: "http://127.0.0.1:8765",
   });
-  assert.strictEqual(explicitCurrent.previewUrl, "http://127.0.0.1:8765");
+  assert.strictEqual(explicitCurrent.previewUrl, "http://127.0.0.1:8765/");
 }
 
 function testRoundTrip() {
@@ -69,6 +73,7 @@ function testRoundTrip() {
       recentProjectCwds: ["/Users/me/app", "/tmp/other"],
     });
     assert.strictEqual(saved.previewUrl, "http://127.0.0.1:5173/foo");
+    assert.strictEqual(fs.statSync(file).mode & 0o777, 0o600);
     const loaded = loadSettings(file);
     assert.deepStrictEqual(loaded, {
       settingsVersion: SETTINGS_VERSION,
@@ -77,6 +82,7 @@ function testRoundTrip() {
       splitRatio: 0.4,
       locale: "",
       previewCollapsed: false,
+      privateMode: false,
       terminalSessions: [],
       activeTerminalId: "",
       recentPreviewUrls: [
@@ -139,6 +145,81 @@ function testPreviewCollapsedPersists() {
   }
 }
 
+function testPrivateModeAndSensitiveUrlsPersistSafely() {
+  const normalized = normalizeSettings({
+    privateMode: true,
+    previewUrl: "https://user:pass@example.com/app?token=secret&tab=one",
+    recentPreviewUrls: [
+      "https://example.com/app?authorization=bearer&tab=two",
+    ],
+  });
+  assert.strictEqual(normalized.privateMode, true);
+  assert.strictEqual(normalized.previewUrl, "https://example.com/app?tab=one");
+  assert.deepStrictEqual(normalized.recentPreviewUrls, [
+    "https://example.com/app?tab=two",
+  ]);
+}
+
+function testPerSessionCaptureStateRoundTripsAndRestores() {
+  const file = tmpFile();
+  try {
+    saveSettings(file, {
+      activeTerminalId: "term-b",
+      terminalSessions: [
+        {
+          id: "term-a",
+          cwd: "/projects/a",
+          label: "A",
+          createdAt: 10,
+          previewUrl: "http://localhost:3000/a",
+          viewportPreset: "mobile-390",
+          lastSelection: { selector: "#a", tag: "button" },
+          lastScreenshotPath: "/captures/a.png",
+          lastCaptureMeta: {
+            kind: "selection",
+            targetSessionId: "term-a",
+          },
+          verifyPair: {
+            before: { screenshotPath: "/captures/a.png" },
+            after: { screenshotPath: "/captures/a-after.png" },
+            verifiedAt: 99,
+            targetSessionId: "term-a",
+            targetCwd: "/projects/a",
+            targetLabel: "A",
+          },
+        },
+        {
+          id: "term-b",
+          cwd: "/projects/b",
+          label: "B",
+          createdAt: 20,
+          previewUrl: "https://example.com/b",
+          viewportPreset: "desktop-1440",
+          lastScreenshotPath: "/captures/b.png",
+        },
+      ],
+    });
+
+    const loaded = loadSettings(file);
+    const restored = restoreCoordinatorState(loaded);
+    const a = getSessionState(restored, "term-a");
+    const b = getSessionState(restored, "term-b");
+    assert.strictEqual(restored.activeSessionId, "term-b");
+    assert.strictEqual(a.previewUrl, "http://localhost:3000/a");
+    assert.strictEqual(a.viewportPreset, "mobile-390");
+    assert.strictEqual(a.lastSelection.selector, "#a");
+    assert.strictEqual(a.verifyPair.after.screenshotPath, "/captures/a-after.png");
+    assert.strictEqual(b.lastScreenshotPath, "/captures/b.png");
+    assert.strictEqual(b.verifyPair, null);
+  } finally {
+    try {
+      fs.unlinkSync(file);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 function testMissingFileDefaults() {
   const file = path.join(os.tmpdir(), `vefg-missing-${Date.now()}.json`);
   const s = loadSettings(file);
@@ -162,6 +243,8 @@ function run() {
     testRecentListsAreDedupedAndCapped,
     testLocaleNormalize,
     testPreviewCollapsedPersists,
+    testPrivateModeAndSensitiveUrlsPersistSafely,
+    testPerSessionCaptureStateRoundTripsAndRestores,
   ];
   let failed = 0;
   for (const t of tests) {

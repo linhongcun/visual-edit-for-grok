@@ -3,6 +3,9 @@
  * PTY instances live in main; this module owns ids, labels, caps, and lists.
  */
 const path = require("path");
+const {
+  normalizeSessionWorkspaceFields,
+} = require("./capture-coordinator.cjs");
 
 const MAX_TERMINAL_SESSIONS = 6;
 
@@ -29,8 +32,7 @@ function makeSessionId() {
 }
 
 /**
- * @param {{ id?: string, cwd?: string, label?: string, createdAt?: number }} [opts]
- * @returns {{ id: string, cwd: string, label: string, createdAt: number }}
+ * @param {{ id?: string, cwd?: string, label?: string, createdAt?: number, previewUrl?: string, viewportPreset?: string, viewportOrientation?: string, lastSelection?: object | null, lastScreenshotPath?: string | null, lastCaptureMeta?: object | null, verifyPair?: object | null }} [opts]
  */
 function createSessionMeta(opts = {}) {
   const cwd = typeof opts.cwd === "string" ? opts.cwd : "";
@@ -46,7 +48,13 @@ function createSessionMeta(opts = {}) {
     typeof opts.createdAt === "number" && Number.isFinite(opts.createdAt)
       ? opts.createdAt
       : Date.now();
-  return { id, cwd, label, createdAt };
+  return {
+    id,
+    cwd,
+    label,
+    createdAt,
+    ...normalizeSessionWorkspaceFields(opts),
+  };
 }
 
 /**
@@ -107,6 +115,13 @@ function normalizeSessionList(raw, fallbackCwd = "") {
       cwd,
       label: typeof o.label === "string" ? o.label : undefined,
       createdAt: typeof o.createdAt === "number" ? o.createdAt : undefined,
+      previewUrl: o.previewUrl,
+      viewportPreset: o.viewportPreset,
+      viewportOrientation: o.viewportOrientation,
+      lastSelection: o.lastSelection,
+      lastScreenshotPath: o.lastScreenshotPath,
+      lastCaptureMeta: o.lastCaptureMeta,
+      verifyPair: o.verifyPair,
     });
     if (seen.has(meta.id)) continue;
     seen.add(meta.id);
@@ -192,7 +207,7 @@ function shouldConfirmCloseTab(tab = {}) {
 
 /**
  * Snapshot for renderer / get-state.
- * @param {Array<{ id: string, cwd: string, label: string, createdAt?: number, shellAlive?: boolean, grokRunning?: boolean, mode?: string | null }>} sessions
+ * @param {Array<{ id: string, cwd: string, label: string, createdAt?: number, shellAlive?: boolean, grokRunning?: boolean, mode?: string | null, previewUrl?: string, viewportPreset?: string, lastSelection?: object | null, lastScreenshotPath?: string | null, lastCaptureMeta?: object | null, verifyPair?: object | null }>} sessions
  * @param {string | null} activeId
  */
 function sessionsSnapshot(sessions, activeId) {
@@ -210,6 +225,7 @@ function sessionsSnapshot(sessions, activeId) {
       shellAlive: Boolean(s.shellAlive),
       grokRunning: Boolean(s.grokRunning),
       mode: s.mode || null,
+      ...normalizeSessionWorkspaceFields(s),
     })),
   );
   return {

@@ -1,6 +1,6 @@
 # Visual Capture for Grok
 
-**Version 0.5.2** · macOS (Apple Silicon)
+**Version 0.6.0** · macOS (Apple Silicon)
 
 Side-by-side workbench: **left = native Grok Build TUI**, **right = website preview**.  
 **Aim** or **Frame** a UI → the app attempts an image paste + grounded DOM-context write in Grok’s PTY. If Grok is not running, text + image stay on the clipboard.
@@ -17,7 +17,7 @@ image chip. Verify the prompt before submitting.
 │ [a][b][+] Folder·Start Grok·Reset│ ║ │ Preview · URL · Aim·Frame │
 │ Active terminal (gets captures)  │ ║ │ · Re-send · Hide          │
 └──────────────────────────────────┴───┴───────────────────────────┘
-  Terminal actions = active tab. Preview actions capture the page → active tab.
+  Terminal actions = active tab. A capture stays bound to the tab that started it.
 ```
 
 ---
@@ -28,7 +28,9 @@ image chip. Verify the prompt before submitting.
 |----------|----------|
 | **Installed app** | `/Applications/Visual Capture for Grok.app` |
 | **Built `.app`** | `release/mac-arm64/Visual Capture for Grok.app` |
-| **DMG** | `release/Visual-Capture-for-Grok-0.4.0-arm64.dmg` |
+| **DMG** | `release/Visual-Capture-for-Grok-0.6.0-arm64.dmg` |
+
+Download the current installer from [GitHub Releases](https://github.com/linhongcun/visual-edit-for-grok/releases).
 
 **Daily use:** open **Visual Capture for Grok** from Applications or Spotlight (⌘Space).
 
@@ -70,9 +72,12 @@ xattr -cr "/Applications/Visual Capture for Grok.app"
 | `npm run dist:dmg` | DMG only (repackages) |
 | `npm run dev` | Vite + Electron with hot reload (`VEFG_DEV=1`) |
 | `npm start` | Build UI then run unpackaged Electron |
-| `npm test` | 72 pure-helper unit tests |
+| `npm test` | Auto-discovered pure-helper unit suites |
+| `npm run typecheck` | TypeScript validation without emitting files |
+| `npm run check` | Unit suites + typecheck + renderer build |
 | `npm run test:electron` | Build + real Electron integration smoke |
 | `npm run test:packaged` | Run the same smoke against the built `.app` |
+| `npm run release:preflight` | Full clean-tree gate through code-signature integrity + verified DMG (not notarization) |
 | `npm run rebuild` | Rebuild `node-pty` for Electron |
 | `npm run demo` | Static demo page on `:8765` for Aim practice |
 
@@ -85,6 +90,8 @@ xattr -cr "/Applications/Visual Capture for Grok.app"
 3. Open a preview URL (⌘R reloads **preview only**, not the terminal)  
 4. **Aim** (⌘⇧A) — click a node; the app attempts to deliver screenshot + DOM context to Grok, with a clipboard fallback
 5. Type the change in **Grok’s own input**, press Enter  
+6. After the edit, open the capture receipt and click **Verify** for a
+   Before/After screenshot + DOM/style comparison; send both images back to Grok if needed.
 
 **Frame** (⌘⇧F) captures either **Full view** or **Target + context**. Target
 mode re-resolves the selector in the current page and safely falls back to a
@@ -104,7 +111,11 @@ While a capture is in flight, Aim / Frame / Re-send are disabled (**single-fligh
 | Multimodal deliver | Screenshot → OS clipboard (file on macOS) → Ctrl+V attempt + bracketed text paste; receipt remains unconfirmed |
 | DOM context | Cursor-style `browser_element` plus viewport/scroll/key styles, with sensitive attributes redacted |
 | Context integrity | Selection is navigation-scoped and rechecked after capture; changed DOM/geometry is discarded instead of pairing stale context with pixels |
+| Per-tab workspaces | URL, viewport, target, capture receipt and Verify pair are isolated per terminal; switching tabs cannot redirect an in-flight delivery |
+| Verify loop | Re-resolves the Aim selector on the same page, captures Before/After, reports DOM/geometry/style changes, and can attempt both image pastes back to Grok |
+| Responsive preview | Fit, desktop, laptop, tablet and phone viewport presets with portrait/landscape emulation; viewport metadata travels with captures |
 | Secure picker | Sandboxed preview preload + per-navigation capability IPC; page-authored console markers are ignored |
+| Preview privacy | Optional in-memory private session, explicit site-data clearing, secret-stripped URL history, denied permissions and downloads blocked by default |
 | Single-flight | Concurrent Aim / Frame / Re-send cannot double-paste |
 | Pick consistency | Busy reject cancels Aim + clears highlight; selection+shot committed only on full success |
 | Status honesty | PTY/Grok process split, attempted vs confirmed delivery, clipboard fallback + manual ⌘V guidance |
@@ -115,6 +126,7 @@ While a capture is in flight, Aim / Frame / Re-send are disabled (**single-fligh
 | Focus handoff | After successful auto-deliver, focus returns to Grok terminal |
 | Shortcuts | Global across terminal/preview: ⌘R preview · Esc Aim cancel · ⌘⇧A Aim · ⌘⇧F Frame · ⌘⇧V Re-send |
 | Language | **EN / 中文** toggle in the toolbar (persisted); first launch follows system locale when possible |
+| Operations | Privacy-safe diagnostics copy, latest-release link, progressive onboarding checks and release CI/preflight |
 
 ---
 
@@ -158,7 +170,7 @@ accepted; the file/image remains on the clipboard for a manual ⌘V fallback.
 ```
 visual-edit-for-grok/
 ├── electron/                 # Main process (CommonJS)
-│   ├── main.cjs              # Window, BrowserView, IPC, capture pipeline
+│   ├── main.cjs              # Window, WebContentsView, IPC, capture orchestration
 │   ├── preload.cjs           # contextBridge API (window.vefg)
 │   ├── terminal.cjs          # node-pty session + grok launch
 │   ├── preview-preload.cjs   # Sandboxed Aim overlay + authenticated IPC
@@ -166,6 +178,12 @@ visual-edit-for-grok/
 │   ├── clipboard-payload.cjs # browser_element text builder (pure)
 │   ├── delivery-status.cjs   # Paste outcome messages (pure)
 │   ├── capture-cleanup.cjs   # Capture dir retention (pure)
+│   ├── capture-coordinator.cjs # Per-terminal workspace + frozen routing (pure)
+│   ├── capture-io.cjs        # Async private PNG / macOS clipboard I/O
+│   ├── verify-policy.cjs     # Before/After comparison + Grok payload (pure)
+│   ├── viewport-presets.cjs  # Responsive emulation plans (pure)
+│   ├── privacy-policy.cjs    # URL/session/download/clear-data policy (pure)
+│   ├── diagnostics.cjs       # Redacted support summary (pure)
 │   ├── settings-store.cjs    # JSON settings load/save (pure)
 │   └── runtime-policy.cjs    # Busy / cleanup / debounce / pick-commit (pure)
 ├── src/                      # Renderer (React + Vite + TypeScript)
@@ -174,6 +192,8 @@ visual-edit-for-grok/
 │       ├── TerminalPane.tsx  # xterm host + focus handoff
 │       └── Icons.tsx
 ├── test/                     # Pure unit tests + Electron integration smoke
+├── scripts/                  # Release preflight + immutable GitHub publishing
+├── .github/workflows/        # macOS arm64 release-baseline CI
 ├── demo/                     # Optional static page for Aim practice
 ├── build/                    # App icons (.icns / .png) for packaging
 ├── dist/                     # Vite production UI (packaged into asar)
@@ -185,7 +205,7 @@ visual-edit-for-grok/
 | Path | Purpose |
 |------|---------|
 | `~/Library/Application Support/Visual Capture for Grok/` | Settings (`visual-capture-settings.json`) |
-| `~/.grok/visual-edit-captures/` | Screenshot PNGs (capped / aged) |
+| `~/.grok/visual-edit-captures/` | Private `0600` screenshot PNGs in a `0700` directory (capped / aged) |
 
 ---
 
@@ -205,12 +225,16 @@ Dev default is the process cwd when sensible.
 
 ```bash
 npm test
+npm run typecheck
 npm run test:electron
 npm run test:packaged  # after npm run pack / dist
+npm run release:preflight
 ```
 
-The pure suites import the shipped `electron/*.cjs` modules. The Electron smoke
-also launches the real app with an isolated profile and fake Grok executable.
+`npm test` discovers the pure `test/*.test.cjs` suites automatically (excluding
+the Electron smoke), so adding a unit file does not require updating a hard-coded
+count or script list. The Electron smoke launches the real app with an isolated
+profile and fake Grok executable.
 
 | File | Covers |
 |------|--------|
@@ -220,7 +244,7 @@ also launches the real app with an isolated profile and fake Grok executable.
 | `test/deliver-helpers.test.cjs` | Payload + paste status + cleanup demo |
 | `test/runtime-policy.test.cjs` | Single-flight, throttle, debounce, pick-commit |
 | `test/terminal.test.cjs` | Shell quoting and truecolor environment policy |
-| `test/electron-smoke.test.cjs` | Secure Aim, stale navigation, cwd, direct Grok PTY, global shortcuts |
+| `test/electron-smoke.test.cjs` | Secure Aim, Verify, responsive viewport, privacy mode, stale navigation, cwd, Grok and shortcuts |
 
 ---
 

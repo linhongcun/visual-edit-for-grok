@@ -30,8 +30,11 @@ Shipped pure API: `classifyDeliveryOutcome` / `deliveryOutcomeLabel` in `electro
 | Quit confirmation while session alive | Done |
 | Shell vs Grok status clarity | Done |
 
-## Deferred (still out of scope)
+## Later status
 
-- GitHub DMG release upload
+- GitHub DMG publishing is implemented in 0.6.0 with immutable tag/asset gates,
+  checksum generation and a full release preflight. Public trusted distribution
+  still requires Developer ID signing and Apple notarization.
 - Grok markdown table layout algorithm
-- Full main.cjs split / redesign
+- A full `main.cjs` redesign remains out of scope; capture coordination, Verify,
+  viewport, privacy, diagnostics and I/O policies are now isolated modules.

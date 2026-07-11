@@ -4,8 +4,15 @@
  */
 const fs = require("fs");
 const path = require("path");
+const {
+  normalizeSessionWorkspaceFields,
+} = require("./capture-coordinator.cjs");
+const {
+  sanitizeHistoryUrl,
+  sanitizeHistoryUrls,
+} = require("./privacy-policy.cjs");
 
-const SETTINGS_VERSION = 1;
+const SETTINGS_VERSION = 2;
 const LEGACY_DEMO_URLS = new Set([
   "http://127.0.0.1:8765",
   "http://127.0.0.1:8765/",
@@ -23,6 +30,8 @@ const DEFAULTS = {
   locale: "",
   /** Hide website preview + URL chrome; terminal uses full width */
   previewCollapsed: false,
+  /** Use an in-memory preview partition and avoid persisting URL history. */
+  privateMode: false,
   /** Multi-terminal tabs: [{ id, cwd, label, createdAt }] */
   terminalSessions: [],
   /** Active terminal tab id */
@@ -44,7 +53,8 @@ function normalizeSettings(raw) {
     const u = o.previewUrl.trim();
     const isLegacyDefault =
       o.settingsVersion == null && LEGACY_DEMO_URLS.has(u);
-    if (/^https?:\/\//i.test(u) && !isLegacyDefault) out.previewUrl = u;
+    const safeUrl = sanitizeHistoryUrl(u);
+    if (safeUrl && !isLegacyDefault) out.previewUrl = safeUrl;
   }
   if (typeof o.projectCwd === "string") {
     out.projectCwd = o.projectCwd;
@@ -62,11 +72,15 @@ function normalizeSettings(raw) {
   if (typeof o.previewCollapsed === "boolean") {
     out.previewCollapsed = o.previewCollapsed;
   }
+  if (typeof o.privateMode === "boolean") {
+    out.privateMode = o.privateMode;
+  }
   if (Array.isArray(o.terminalSessions)) {
     out.terminalSessions = o.terminalSessions
       .filter((item) => item && typeof item === "object")
       .map((item) => {
         const row = /** @type {Record<string, unknown>} */ (item);
+        const workspace = normalizeSessionWorkspaceFields(row);
         return {
           id: typeof row.id === "string" ? row.id : "",
           cwd: typeof row.cwd === "string" ? row.cwd : "",
@@ -75,6 +89,8 @@ function normalizeSettings(raw) {
             typeof row.createdAt === "number" && Number.isFinite(row.createdAt)
               ? row.createdAt
               : 0,
+          ...workspace,
+          previewUrl: sanitizeHistoryUrl(workspace.previewUrl) || "",
         };
       })
       .filter((item) => item.id)
@@ -84,13 +100,7 @@ function normalizeSettings(raw) {
     out.activeTerminalId = o.activeTerminalId.trim();
   }
   if (Array.isArray(o.recentPreviewUrls)) {
-    out.recentPreviewUrls = Array.from(
-      new Set(
-        o.recentPreviewUrls
-          .filter((value) => typeof value === "string" && /^https?:\/\//i.test(value))
-          .map((value) => value.trim()),
-      ),
-    ).slice(0, 8);
+    out.recentPreviewUrls = sanitizeHistoryUrls(o.recentPreviewUrls, 8);
   }
   if (Array.isArray(o.recentProjectCwds)) {
     out.recentProjectCwds = Array.from(
@@ -127,8 +137,23 @@ function saveSettings(filePath, partial = {}) {
   const prev = loadSettings(filePath);
   const next = normalizeSettings({ ...prev, ...partial });
   const dir = path.dirname(filePath);
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(next, null, 2), "utf8");
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    fs.writeFileSync(tempPath, JSON.stringify(next, null, 2), {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    });
+    fs.renameSync(tempPath, filePath);
+    fs.chmodSync(filePath, 0o600);
+  } finally {
+    try {
+      fs.unlinkSync(tempPath);
+    } catch {
+      // Rename succeeded or no temporary file was created.
+    }
+  }
   return next;
 }
 

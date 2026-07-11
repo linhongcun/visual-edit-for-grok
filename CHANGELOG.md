@@ -2,6 +2,42 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.6.0] — 2026-07-11
+
+### Capture-to-verify workflow
+
+- Every terminal tab now owns its preview URL, responsive viewport, DOM target,
+  last capture receipt and Before/After pair. Aim/Frame freeze the destination
+  before asynchronous work, so switching tabs cannot redirect a capture.
+- Added **Verify**: re-resolve the original Aim selector on the same page,
+  capture an After image, compare DOM text/identity/attributes/styles/geometry,
+  and attempt to paste both Before and After images back to the original Grok.
+- Added desktop/laptop/tablet/phone viewport presets with orientation emulation;
+  capture metadata records the effective preset and dimensions.
+
+### Security, privacy and operations
+
+- Replaced deprecated `BrowserView` with `WebContentsView`; preview downloads
+  are blocked, permissions stay denied, and external schemes remain restricted.
+- Screenshot/clipboard work is asynchronous; capture files use a private
+  directory (`0700`) and new files use `0600` with no-overwrite writes.
+- Added an in-memory private preview mode, explicit site-data clearing, and
+  secret-stripped persisted URLs/history.
+- Added privacy-safe diagnostics, a latest-release action, progressive
+  onboarding state, and expanded Electron smoke coverage for Verify/privacy.
+
+### Reproducible release baseline
+
+- Restored the complete application manifest and synchronized package, lockfile,
+  documentation, bundle and DMG versioning at `0.6.0`.
+- Unit suites are auto-discovered; `typecheck`, `check` and `release:preflight`
+  provide stable validation entry points without a drifting test-count claim.
+- Release preflight enforces a clean tree and official-registry lockfile, then
+  runs unit, TypeScript, renderer, Electron, packaged-app, codesign and DMG gates.
+- macOS arm64 GitHub Actions runs the same full preflight from `npm ci`.
+- GitHub publishing refuses existing releases/tags and never replaces a
+  previously published asset; release assets include a SHA-256 checksum.
+
 ## [0.5.4] — 2026-07-11
 
 ### Multi-terminal operator consistency

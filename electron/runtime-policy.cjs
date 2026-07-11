@@ -714,7 +714,7 @@ function shouldFlushSettings(opts = {}) {
  * @returns {number[]}
  */
 function focusHandoffDelays() {
-  // Immediate reclaim + one deferred pass after BrowserView/React settle
+  // Immediate reclaim + one deferred pass after WebContentsView/React settle
   return [0, 100];
 }
 
@@ -755,7 +755,7 @@ function operatorActionState(state = {}) {
 /**
  * Pure workspace split for terminal vs website preview.
  * When preview is collapsed, terminal owns the full content width and
- * the native BrowserView should be zero-sized / hidden.
+ * the native WebContentsView should be zero-sized / hidden.
  *
  * @param {{
  *   contentWidth: number,

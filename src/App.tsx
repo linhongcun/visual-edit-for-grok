@@ -28,6 +28,10 @@ import type {
   GrokRuntimeState,
   PreviewStatus,
   TerminalStatus,
+  ViewportOrientation,
+  ViewportPreset,
+  ViewportPresetId,
+  VerifyPair,
 } from "./types";
 import {
   detectBrowserLocale,
@@ -41,6 +45,14 @@ const DEFAULT_PREVIEW_URL = "";
 const MIN_TERMINAL_WIDTH = 400;
 const MIN_PREVIEW_WIDTH = 320;
 const SPLITTER_WIDTH = 5;
+const DEFAULT_VIEWPORT_PRESETS: ViewportPreset[] = [
+  { id: "fit", label: "Fit", width: null, height: null, mobile: false },
+  { id: "desktop", label: "1440 × 900", width: 1440, height: 900, mobile: false },
+  { id: "laptop", label: "1024 × 768", width: 1024, height: 768, mobile: false },
+  { id: "tablet", label: "768 × 1024", width: 768, height: 1024, mobile: true },
+  { id: "phone390", label: "390 × 844", width: 390, height: 844, mobile: true },
+  { id: "phone375", label: "375 × 812", width: 375, height: 812, mobile: true },
+];
 
 interface CaptureReceipt {
   target: string;
@@ -107,6 +119,44 @@ function formatReceiptTime(timestamp: number): string {
   }).format(new Date(timestamp));
 }
 
+function localizedVerificationSummary(
+  pair: VerifyPair,
+  locale: Locale,
+): string[] {
+  const comparison = pair.comparison;
+  if (!comparison) return [];
+  if (!comparison.targetFound) return [t(locale, "verify.targetMissing")];
+  const rows: string[] = [];
+  if (comparison.geometryChanged && comparison.geometryDelta) {
+    const signed = (value = 0) => `${value >= 0 ? "+" : ""}${value}`;
+    rows.push(
+      t(locale, "verify.geometry", {
+        x: signed(comparison.geometryDelta.left),
+        y: signed(comparison.geometryDelta.top),
+        width: signed(comparison.geometryDelta.width),
+        height: signed(comparison.geometryDelta.height),
+      }),
+    );
+  }
+  if (comparison.textChanged) rows.push(t(locale, "verify.textChanged"));
+  if (comparison.identityChanged) rows.push(t(locale, "verify.identityChanged"));
+  if (comparison.attributeChanges?.length) {
+    rows.push(
+      t(locale, "verify.attributesChanged", {
+        names: comparison.attributeChanges.join(", "),
+      }),
+    );
+  }
+  if (comparison.styleChanges?.length) {
+    rows.push(
+      t(locale, "verify.stylesChanged", {
+        names: comparison.styleChanges.map((item) => item.property).join(", "),
+      }),
+    );
+  }
+  return rows.length ? rows : [t(locale, "verify.noTrackedChangeDetail")];
+}
+
 function isDefaultPreview(url?: string): boolean {
   if (!url) return true;
   try {
@@ -151,14 +201,33 @@ export default function App() {
     shellAlive?: boolean;
     grokRunning?: boolean;
     mode?: string | null;
+    previewUrl?: string;
+    viewportPreset?: ViewportPresetId;
+    viewportOrientation?: ViewportOrientation;
+    lastSelection?: ElementSelection | null;
+    lastScreenshotPath?: string | null;
+    verifyPair?: VerifyPair | null;
   };
   const [termTabs, setTermTabs] = useState<TermTab[]>([]);
   const [activeTermId, setActiveTermId] = useState<string | null>(null);
   const activeTermIdRef = useRef<string | null>(null);
   const [maxTermSessions, setMaxTermSessions] = useState(6);
   const [frameMode, setFrameMode] = useState<FrameMode>("viewport");
+  const [viewportPresets, setViewportPresets] = useState<ViewportPreset[]>(
+    DEFAULT_VIEWPORT_PRESETS,
+  );
+  const [viewportPreset, setViewportPreset] =
+    useState<ViewportPresetId>("fit");
+  const [viewportOrientation, setViewportOrientation] =
+    useState<ViewportOrientation>("portrait");
+  const [privateMode, setPrivateMode] = useState(false);
   const [receipt, setReceipt] = useState<CaptureReceipt | null>(null);
   const [receiptThumbnail, setReceiptThumbnail] = useState<string | null>(null);
+  const [verifyPair, setVerifyPair] = useState<VerifyPair | null>(null);
+  const [verifyThumbnails, setVerifyThumbnails] = useState<{
+    before: string | null;
+    after: string | null;
+  }>({ before: null, after: null });
   const [termFocusNonce, setTermFocusNonce] = useState(0);
   /** Bump after splitter settle so xterm re-fits and PTY gets new cols (wide tables). */
   const [termFitNonce, setTermFitNonce] = useState(0);
@@ -296,6 +365,41 @@ export default function App() {
     };
   }, [receipt?.screenshotPath]);
 
+  useEffect(() => {
+    const beforePath = verifyPair?.before?.screenshotPath;
+    const afterPath = verifyPair?.after?.screenshotPath;
+    if (!isElectron() || (!beforePath && !afterPath)) {
+      setVerifyThumbnails({ before: null, after: null });
+      return;
+    }
+    let canceled = false;
+    void Promise.all([
+      beforePath
+        ? window.vefg.captureThumbnail(beforePath)
+        : Promise.resolve({ dataUrl: null }),
+      afterPath
+        ? window.vefg.captureThumbnail(afterPath)
+        : Promise.resolve({ dataUrl: null }),
+    ])
+      .then(([before, after]) => {
+        if (!canceled) {
+          setVerifyThumbnails({
+            before: before.dataUrl,
+            after: after.dataUrl,
+          });
+        }
+      })
+      .catch(() => {
+        if (!canceled) setVerifyThumbnails({ before: null, after: null });
+      });
+    return () => {
+      canceled = true;
+    };
+  }, [
+    verifyPair?.before?.screenshotPath,
+    verifyPair?.after?.screenshotPath,
+  ]);
+
   function focusGrokTerminal() {
     setTermFocusNonce((n) => n + 1);
   }
@@ -354,7 +458,7 @@ export default function App() {
       }
       if (raw === "exited" || raw === "stopped") return "exited";
       if (raw === "idle" || raw === "not-started") return "idle";
-      if (status.grokRunning === false && status.grokLaunchRequested !== true) {
+      if (status.grokRunning === false) {
         return shellAlive === false ? "exited" : "idle";
       }
       if (shellAlive === false) {
@@ -437,6 +541,7 @@ export default function App() {
         selectionRef.current = s.lastSelection;
         setScreenshotPath(s.lastScreenshotPath);
         screenshotPathRef.current = s.lastScreenshotPath;
+        setVerifyPair(s.lastVerifyPair || null);
         setProjectCwd(s.projectCwd || "");
         setRecentPreviewUrls(s.recentPreviewUrls || []);
         setRecentProjectCwds(s.recentProjectCwds || []);
@@ -453,6 +558,10 @@ export default function App() {
         }
         setCaptureBusy(Boolean(s.captureBusy));
         setFrameMode(s.frameMode || "viewport");
+        setViewportPresets(s.viewportPresets || DEFAULT_VIEWPORT_PRESETS);
+        setViewportPreset(s.viewportPreset || "fit");
+        setViewportOrientation(s.viewportOrientation || "portrait");
+        setPrivateMode(Boolean(s.privateMode ?? s.previewStatus?.privateMode));
         if (s.layout?.terminalWidth) setTerminalWidth(s.layout.terminalWidth);
         const collapsed = Boolean(
           s.previewCollapsed ?? s.layout?.previewCollapsed,
@@ -494,6 +603,13 @@ export default function App() {
     const offs = [
       api.on("preview:status", (p) => {
         const next = p as PreviewStatus;
+        if (next.viewportPreset) setViewportPreset(next.viewportPreset);
+        if (next.viewportOrientation) {
+          setViewportOrientation(next.viewportOrientation);
+        }
+        if (typeof next.privateMode === "boolean") {
+          setPrivateMode(next.privateMode);
+        }
         setPreview((prev) => {
           const merged = { ...prev, ...next };
           previewRef.current = merged;
@@ -553,6 +669,40 @@ export default function App() {
           terminalAlive?: boolean;
         };
         // Main process owns post-deliver focus handoff — do not storm timers here
+        if (r.kind === "workspace") {
+          const targetId = r.targetSessionId || null;
+          if (targetId) {
+            setActiveTermId(targetId);
+            activeTermIdRef.current = targetId;
+          }
+          const workspaceSelection = r.selection ?? null;
+          const workspacePath =
+            r.screenshotPath ?? r.captureMeta?.screenshotPath ?? null;
+          setSelection(workspaceSelection);
+          selectionRef.current = workspaceSelection;
+          setScreenshotPath(workspacePath);
+          screenshotPathRef.current = workspacePath;
+          setVerifyPair(r.verifyPair || null);
+          if (r.viewportPreset) setViewportPreset(r.viewportPreset);
+          if (r.viewportOrientation) {
+            setViewportOrientation(r.viewportOrientation);
+          }
+          if (typeof r.previewUrl === "string") {
+            setUrlInput(r.previewUrl);
+          }
+          setReceipt(
+            workspaceSelection || workspacePath || r.captureMeta
+              ? makeReceipt(r, workspaceSelection, workspacePath)
+              : null,
+          );
+          return;
+        }
+        if (
+          r.targetSessionId &&
+          r.targetSessionId !== activeTermIdRef.current
+        ) {
+          return;
+        }
         if (r.kind === "error") {
           showToast(
             r.message ||
@@ -561,6 +711,20 @@ export default function App() {
                 t(localeRef.current, "error.next.capture"),
           );
           return;
+        }
+        if (r.kind === "verify") {
+          setVerifyPair(r.verifyPair || null);
+          showToast(t(localeRef.current, "verify.complete"));
+          return;
+        }
+        if (r.kind === "verify-deliver") {
+          setVerifyPair(r.verifyPair || null);
+          applyTerminalRuntime(r);
+          showToast(t(localeRef.current, "verify.sent"));
+          return;
+        }
+        if (r.kind === "selection" || r.kind === "screenshot") {
+          setVerifyPair(null);
         }
         const selected =
           r.selection === undefined
@@ -571,12 +735,16 @@ export default function App() {
           selectionRef.current = r.selection || null;
         }
         const nextPath =
-          r.screenshotPath ||
-          r.path ||
-          r.captureMeta?.screenshotPath ||
-          screenshotPathRef.current ||
+          r.screenshotPath ??
+          r.path ??
+          r.captureMeta?.screenshotPath ??
+          screenshotPathRef.current ??
           null;
-        if (r.screenshotPath || r.path) {
+        if (
+          r.screenshotPath !== undefined ||
+          r.path !== undefined ||
+          r.captureMeta?.screenshotPath !== undefined
+        ) {
           setScreenshotPath(nextPath);
           screenshotPathRef.current = nextPath;
         }
@@ -635,10 +803,12 @@ export default function App() {
     if (!url) return;
     if (!/^https?:\/\//i.test(url)) url = `http://${url}`;
     setUrlInput(url);
-    setRecentPreviewUrls((current) => [
-      url,
-      ...current.filter((item) => item !== url),
-    ].slice(0, 8));
+    if (!privateMode) {
+      setRecentPreviewUrls((current) => [
+        url,
+        ...current.filter((item) => item !== url),
+      ].slice(0, 8));
+    }
     setPreview((current) => ({
       ...current,
       url,
@@ -684,6 +854,68 @@ export default function App() {
   async function ensurePreviewExpanded() {
     if (!previewCollapsedRef.current) return;
     await applyPreviewCollapsed(false);
+  }
+
+  async function onViewportChange(
+    presetId: ViewportPresetId,
+    orientation: ViewportOrientation = viewportOrientation,
+  ) {
+    setViewportPreset(presetId);
+    setViewportOrientation(orientation);
+    if (!isElectron()) return;
+    try {
+      const status = await window.vefg.setViewport({ presetId, orientation });
+      setPreview((current) => ({ ...current, ...status }));
+    } catch (err) {
+      toastError(err);
+    }
+  }
+
+  async function onTogglePrivateMode() {
+    if (!isElectron() || captureBusy) return;
+    try {
+      const status = await window.vefg.setPrivateMode(!privateMode);
+      setPrivateMode(Boolean(status.privateMode));
+      setPreview((current) => ({ ...current, ...status }));
+      showToast(
+        status.privateMode
+          ? tr("privacy.privateOnToast")
+          : tr("privacy.privateOffToast"),
+      );
+    } catch (err) {
+      toastError(err);
+    }
+  }
+
+  async function onClearPreviewData() {
+    if (!isElectron()) return;
+    if (!window.confirm(tr("privacy.clearConfirm"))) return;
+    try {
+      await window.vefg.clearPreviewData("all");
+      showToast(tr("privacy.cleared"));
+    } catch (err) {
+      toastError(err);
+    }
+  }
+
+  async function onCopyDiagnostics() {
+    if (!isElectron()) return;
+    try {
+      await window.vefg.copyDiagnostics();
+      showToast(tr("diagnostics.copied"));
+    } catch (err) {
+      toastError(err);
+    }
+  }
+
+  async function onCheckUpdates() {
+    if (!isElectron()) return;
+    try {
+      await window.vefg.checkUpdates();
+      showToast(tr("updates.opened"));
+    } catch (err) {
+      toastError(err);
+    }
   }
 
   async function togglePick() {
@@ -742,7 +974,7 @@ export default function App() {
     captureBusyRef.current = true;
     setCaptureBusy(true);
     try {
-      await window.vefg.deliver({});
+      await window.vefg.deliver();
     } catch (err) {
       toastError(err);
     } finally {
@@ -751,6 +983,42 @@ export default function App() {
     }
   }
   onResendRef.current = onResend;
+
+  async function onVerify() {
+    if (!isElectron() || captureBusyRef.current || captureBusy) return;
+    if (!selection?.selector || !screenshotPath) {
+      showToast(tr("verify.needsAim"));
+      return;
+    }
+    await ensurePreviewExpanded();
+    captureBusyRef.current = true;
+    setCaptureBusy(true);
+    try {
+      const result = await window.vefg.verify();
+      setVerifyPair(result.verifyPair || null);
+    } catch (err) {
+      toastError(err);
+    } finally {
+      captureBusyRef.current = false;
+      setCaptureBusy(false);
+    }
+  }
+
+  async function onDeliverVerification() {
+    if (!isElectron() || captureBusyRef.current || captureBusy || !verifyPair) {
+      return;
+    }
+    captureBusyRef.current = true;
+    setCaptureBusy(true);
+    try {
+      await window.vefg.deliverVerification();
+    } catch (err) {
+      toastError(err);
+    } finally {
+      captureBusyRef.current = false;
+      setCaptureBusy(false);
+    }
+  }
 
   async function onClear() {
     if (!isElectron()) return;
@@ -761,6 +1029,8 @@ export default function App() {
     screenshotPathRef.current = null;
     setReceipt(null);
     setReceiptThumbnail(null);
+    setVerifyPair(null);
+    setVerifyThumbnails({ before: null, after: null });
     setFrameMode("viewport");
     showToast(tr("toast.cleared"));
   }
@@ -995,6 +1265,12 @@ export default function App() {
   const previewCapturable = Boolean(
     preview.url && !preview.loading && !preview.error && !preview.isWelcome,
   );
+  const setupProgress = {
+    folder: Boolean(projectCwd),
+    grok: grokState === "launch-requested" || grokState === "ready",
+    preview: previewCapturable,
+    capture: hasCapture,
+  };
   const setupOnboarding =
     !hasCapture ||
     (Boolean(preview.error) && isDefaultPreview(preview.url));
@@ -1085,7 +1361,7 @@ export default function App() {
         aria-label={tr("nav.urlAria")}
       />
       <datalist id="recent-preview-urls">
-        {recentPreviewUrls.map((url) => (
+        {(privateMode ? [] : recentPreviewUrls).map((url) => (
           <option value={url} key={url} />
         ))}
       </datalist>
@@ -1113,6 +1389,7 @@ export default function App() {
         type="button"
         className="btn btn-ghost btn-compact"
         onClick={() => void onPickCwd()}
+        disabled={captureBusy}
         title={projectCwd || tr("actions.folderTitle")}
         aria-label={tr("actions.folderAria")}
       >
@@ -1123,6 +1400,7 @@ export default function App() {
         <select
           className="recent-project-select compact"
           value=""
+          disabled={captureBusy}
           onChange={(event) => {
             void onRecentProject(event.target.value);
           }}
@@ -1158,6 +1436,7 @@ export default function App() {
         type="button"
         className="btn btn-ghost btn-compact"
         onClick={() => void onRestartTerminal()}
+        disabled={captureBusy}
         title={tr("status.resetTermAria")}
         aria-label={tr("status.resetTermAria")}
       >
@@ -1173,6 +1452,39 @@ export default function App() {
       role="group"
       aria-label={tr("actions.groupAria")}
     >
+      <select
+        className="viewport-preset-select"
+        value={viewportPreset}
+        onChange={(event) =>
+          void onViewportChange(event.target.value as ViewportPresetId)
+        }
+        disabled={captureBusy}
+        aria-label={tr("actions.viewportAria")}
+        title={tr("actions.viewportTitle")}
+      >
+        {viewportPresets.map((preset) => (
+          <option value={preset.id} key={preset.id}>
+            {preset.id === "fit" ? tr("actions.viewportFit") : preset.label}
+          </option>
+        ))}
+      </select>
+      {viewportPreset !== "fit" ? (
+        <button
+          type="button"
+          className="btn btn-ghost btn-compact orientation-toggle"
+          disabled={captureBusy}
+          onClick={() =>
+            void onViewportChange(
+              viewportPreset,
+              viewportOrientation === "portrait" ? "landscape" : "portrait",
+            )
+          }
+          title={tr("actions.orientationTitle")}
+          aria-label={tr("actions.orientationAria")}
+        >
+          {viewportOrientation === "portrait" ? "↕" : "↔"}
+        </button>
+      ) : null}
       <button
         type="button"
         className={`btn btn-pick btn-compact ${pickMode ? "active" : ""}`}
@@ -1284,6 +1596,41 @@ export default function App() {
             {locale === "zh" ? tr("actions.langEn") : tr("actions.langZh")}
           </button>
 
+          <button
+            type="button"
+            className={`btn btn-ghost utility-action privacy-control ${privateMode ? "active" : ""}`}
+            onClick={() => void onTogglePrivateMode()}
+            disabled={captureBusy}
+            aria-pressed={privateMode}
+            title={tr("privacy.privateTitle")}
+          >
+            {privateMode ? tr("privacy.privateOn") : tr("privacy.privateOff")}
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost utility-action"
+            onClick={() => void onClearPreviewData()}
+            title={tr("privacy.clearTitle")}
+          >
+            {tr("privacy.clear")}
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost utility-action"
+            onClick={() => void onCopyDiagnostics()}
+            title={tr("diagnostics.title")}
+          >
+            {tr("diagnostics.action")}
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost utility-action"
+            onClick={() => void onCheckUpdates()}
+            title={tr("updates.title")}
+          >
+            {tr("updates.action")}
+          </button>
+
           {/* Empty titlebar region: drag the window */}
           <div className="titlebar-drag-spacer" aria-hidden />
 
@@ -1341,17 +1688,17 @@ export default function App() {
                     : tr("status.setupPreviewFail")
                   : tr("status.setupFirst")}
               </strong>
-              <span>
-                <b>1</b> {tr("status.setup1")}
+              <span className={setupProgress.folder ? "done" : ""}>
+                <b>{setupProgress.folder ? "✓" : "1"}</b> {tr("status.setup1")}
               </span>
-              <span>
-                <b>2</b> {tr("status.setup2")}
+              <span className={setupProgress.grok ? "done" : ""}>
+                <b>{setupProgress.grok ? "✓" : "2"}</b> {tr("status.setup2")}
               </span>
-              <span>
-                <b>3</b> {tr("status.setup3")}
+              <span className={setupProgress.preview ? "done" : ""}>
+                <b>{setupProgress.preview ? "✓" : "3"}</b> {tr("status.setup3")}
               </span>
-              <span>
-                <b>4</b> {tr("status.setup4")}
+              <span className={setupProgress.capture ? "done" : ""}>
+                <b>{setupProgress.capture ? "✓" : "4"}</b> {tr("status.setup4")}
               </span>
               <span
                 className={`term-pill ${terminalAlive ? "on" : "off"}`}
@@ -1368,6 +1715,7 @@ export default function App() {
                 type="button"
                 className="link-btn setup-reset"
                 onClick={() => void onRestartTerminal()}
+                disabled={captureBusy}
               >
                 {tr("status.resetTerm")}
               </button>
@@ -1451,7 +1799,68 @@ export default function App() {
                       <dt>{tr("status.receiptDelivery")}</dt>
                       <dd className="receipt-delivery">{receipt.delivery}</dd>
                     </dl>
+                    {verifyPair ? (
+                      <section className="verify-card" aria-label={tr("verify.panel") }>
+                        <div className="verify-heading">
+                          <strong>{tr("verify.panel")}</strong>
+                          <span
+                            className={`verify-result ${
+                              verifyPair.comparison?.changed ? "changed" : "unchanged"
+                            }`}
+                          >
+                            {verifyPair.comparison?.changed
+                              ? tr("verify.changed")
+                              : tr("verify.noTrackedChange")}
+                          </span>
+                        </div>
+                        <div className="verify-images">
+                          <figure>
+                            {verifyThumbnails.before ? (
+                              <img src={verifyThumbnails.before} alt={tr("verify.before")} />
+                            ) : (
+                              <div className="verify-image-placeholder" />
+                            )}
+                            <figcaption>{tr("verify.before")}</figcaption>
+                          </figure>
+                          <figure>
+                            {verifyThumbnails.after ? (
+                              <img src={verifyThumbnails.after} alt={tr("verify.after")} />
+                            ) : (
+                              <div className="verify-image-placeholder" />
+                            )}
+                            <figcaption>{tr("verify.after")}</figcaption>
+                          </figure>
+                        </div>
+                        <ul className="verify-summary">
+                          {localizedVerificationSummary(verifyPair, locale).map((item) => (
+                            <li key={item}>{item}</li>
+                          ))}
+                        </ul>
+                        <button
+                          type="button"
+                          className="btn btn-primary verify-send"
+                          disabled={captureBusy}
+                          onClick={() => void onDeliverVerification()}
+                        >
+                          <IconSend />
+                          {tr("verify.send")}
+                        </button>
+                      </section>
+                    ) : null}
                     <div className="receipt-actions">
+                      <button
+                        type="button"
+                        className="link-btn"
+                        disabled={
+                          captureBusy ||
+                          preview.loading ||
+                          !selection?.selector ||
+                          !screenshotPath
+                        }
+                        onClick={() => void onVerify()}
+                      >
+                        {tr("verify.action")}
+                      </button>
                       <button
                         type="button"
                         className="link-btn"
@@ -1509,6 +1918,7 @@ export default function App() {
                   type="button"
                   className="link-btn"
                   onClick={() => void onRestartTerminal()}
+                  disabled={captureBusy}
                   aria-label={tr("status.resetTermAria")}
                 >
                   {tr("status.resetTerm")}
@@ -1567,6 +1977,7 @@ export default function App() {
                       <button
                         type="button"
                         className="term-tab-close"
+                        disabled={captureBusy}
                         title={
                           tab.grokRunning
                             ? tr("term.closeGrokTitle")

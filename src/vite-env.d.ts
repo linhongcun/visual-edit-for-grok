@@ -9,6 +9,10 @@ import type {
   GrokRuntimeState,
   LayoutBounds,
   PreviewStatus,
+  ViewportOrientation,
+  ViewportPreset,
+  ViewportPresetId,
+  VerifyPair,
 } from "./types";
 
 export interface VefgApi {
@@ -17,6 +21,7 @@ export interface VefgApi {
     pickMode: boolean;
     lastSelection: ElementSelection | null;
     lastScreenshotPath: string | null;
+    lastVerifyPair?: VerifyPair | null;
     captureDir: string;
     projectCwd: string;
     recentPreviewUrls?: string[];
@@ -25,6 +30,11 @@ export interface VefgApi {
     previewCollapsed?: boolean;
     autoPasteTerminal: boolean;
     frameMode?: FrameMode;
+    viewportPresets?: ViewportPreset[];
+    viewportPreset?: ViewportPresetId;
+    viewportOrientation?: ViewportOrientation;
+    privateMode?: boolean;
+    appVersion?: string;
     locale?: "en" | "zh" | string;
     captureBusy?: boolean;
     terminals?: {
@@ -36,6 +46,13 @@ export interface VefgApi {
         shellAlive?: boolean;
         grokRunning?: boolean;
         mode?: string | null;
+        previewUrl?: string;
+        viewportPreset?: ViewportPresetId;
+        viewportOrientation?: ViewportOrientation;
+        lastSelection?: ElementSelection | null;
+        lastScreenshotPath?: string | null;
+        lastCaptureMeta?: CaptureReceiptState | null;
+        verifyPair?: VerifyPair | null;
       }>;
       activeId: string | null;
       maxSessions?: number;
@@ -58,6 +75,12 @@ export interface VefgApi {
   reload: () => Promise<{ ok: boolean; status?: PreviewStatus }>;
   goBack: () => Promise<{ ok: boolean; status?: PreviewStatus }>;
   goForward: () => Promise<{ ok: boolean; status?: PreviewStatus }>;
+  setViewport: (opts: {
+    presetId: ViewportPresetId;
+    orientation?: ViewportOrientation;
+  }) => Promise<PreviewStatus>;
+  setPrivateMode: (enabled: boolean) => Promise<PreviewStatus>;
+  clearPreviewData: (scope?: "all" | "origin") => Promise<{ ok: boolean }>;
   setPickMode: (
     enabled: boolean,
   ) => Promise<{
@@ -79,11 +102,20 @@ export interface VefgApi {
     hasImage: boolean;
     text?: string;
   }>;
-  deliver: (enrichment?: EnrichmentPayload) => Promise<{
+  deliver: () => Promise<{
     copied: boolean;
     pastedToTerminal?: boolean;
     hasImage: boolean;
     text?: string;
+  }>;
+  verify: () => Promise<{
+    verifyPair: VerifyPair;
+    targetSessionId?: string;
+  }>;
+  deliverVerification: () => Promise<{
+    copied: boolean;
+    pastedToTerminal?: boolean;
+    imageAttachmentsAttempted?: number;
   }>;
   openCaptureFolder: () => Promise<{ ok: boolean; path: string }>;
   captureThumbnail: (capturePath: string) => Promise<{ dataUrl: string | null }>;
@@ -91,6 +123,8 @@ export interface VefgApi {
   setAutoPaste: (enabled: boolean) => Promise<{ autoPasteTerminal: boolean }>;
   setFrameMode: (mode: FrameMode) => Promise<{ frameMode: FrameMode }>;
   setLocale: (locale: "en" | "zh" | string) => Promise<{ locale: "en" | "zh" }>;
+  copyDiagnostics: () => Promise<{ ok: boolean }>;
+  checkUpdates: () => Promise<{ ok: boolean }>;
   openExternal: (url: string) => Promise<{ ok: boolean }>;
   pickProjectDir: () => Promise<{
     projectCwd: string;

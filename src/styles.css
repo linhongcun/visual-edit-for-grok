@@ -316,6 +316,25 @@ summary:focus-visible,
   margin-right: 2px;
 }
 
+.utility-action {
+  min-height: 28px;
+  padding-inline: 7px;
+  font-size: 10px;
+}
+
+.privacy-control {
+  min-height: 26px;
+  height: 26px;
+  padding-inline: 6px;
+  font-size: 9px;
+  flex-shrink: 0;
+}
+
+.privacy-control.active {
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+}
+
 .toolbar-actions {
   display: flex;
   align-items: center;
@@ -571,6 +590,15 @@ summary:focus-visible,
   font-size: 10px;
 }
 
+.setup-inline span.done {
+  color: color-mix(in srgb, var(--color-accent) 72%, var(--color-muted-fg));
+}
+
+.setup-inline span.done b {
+  background: color-mix(in srgb, var(--color-accent) 28%, transparent);
+  color: var(--color-accent);
+}
+
 .setup-inline .term-pill,
 .setup-inline .setup-reset {
   flex-shrink: 0;
@@ -767,6 +795,81 @@ summary:focus-visible,
 .receipt-grid .receipt-delivery {
   font-family: var(--font);
   color: #fde68a;
+}
+
+.verify-card {
+  margin: 10px 0;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--color-accent) 28%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-accent) 6%, transparent);
+}
+
+.verify-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 11px;
+}
+
+.verify-result {
+  color: var(--color-accent);
+  font-size: 10px;
+}
+
+.verify-result.changed {
+  color: #fde68a;
+}
+
+.verify-images {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.verify-images figure {
+  min-width: 0;
+  margin: 0;
+}
+
+.verify-images img,
+.verify-image-placeholder {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: contain;
+  border: 1px solid color-mix(in srgb, var(--color-border) 55%, transparent);
+  border-radius: 5px;
+  background: #080d18;
+}
+
+.verify-images figcaption {
+  margin-top: 4px;
+  color: var(--color-muted-fg);
+  font-size: 10px;
+  text-align: center;
+}
+
+.verify-summary {
+  margin: 8px 0;
+  padding-left: 16px;
+  color: var(--color-muted-fg);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.verify-send {
+  width: 100%;
+  min-height: 30px;
+  justify-content: center;
+  font-size: 11px;
+}
+
+.verify-send svg {
+  width: 13px;
+  height: 13px;
 }
 
 .receipt-actions {
@@ -974,6 +1077,23 @@ code {
   height: 28px;
   padding-left: 8px;
   padding-right: 8px;
+}
+
+.viewport-preset-select {
+  width: 86px;
+  min-height: 28px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-muted);
+  color: var(--color-foreground);
+  padding: 0 18px 0 6px;
+  font-size: 10px;
+}
+
+.orientation-toggle {
+  width: 28px;
+  padding: 0;
+  font-size: 14px;
 }
 
 .term-tab {

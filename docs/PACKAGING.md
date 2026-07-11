@@ -7,22 +7,42 @@ How to produce the **Visual Capture for Grok** macOS application from this repo.
 - macOS on **Apple Silicon** (`arm64`)
 - Node.js 22.12+ (required by Electron 43 / `@electron/rebuild` 4)
 - Xcode Command Line Tools (for native `node-pty` rebuild)
-- `npm install` completed successfully
+- Clean checkout with `package-lock.json` committed
 
-## One-shot release
+## Verified local release build
 
 ```bash
 cd visual-edit-for-grok
-npm install
-npm run dist
+npm ci --registry=https://registry.npmjs.org
+npm run release:preflight
 ```
 
-This runs:
+The preflight requires a clean macOS arm64 worktree and runs:
 
-1. `vite build` → `dist/` (renderer)
-2. `electron-builder --mac` →  
+1. auto-discovered unit suites, TypeScript validation and `vite build`
+2. unpackaged Electron/CDP smoke
+3. `electron-builder --mac` →
    - `release/mac-arm64/Visual Capture for Grok.app`  
    - `release/Visual-Capture-for-Grok-<version>-arm64.dmg`
+4. packaged-app smoke, `codesign --verify`, bundle version/architecture checks,
+   `hdiutil verify` and update-metadata validation
+
+For local validation of an intentional uncommitted change, set
+`VEFG_RELEASE_ALLOW_DIRTY=1`; the publishing script never permits this bypass.
+
+### Publish a new GitHub Release
+
+```bash
+./scripts/publish-release.sh
+```
+
+Publishing requires a clean `HEAD` equal to `origin/main`, runs the complete
+official-registry `npm ci` + preflight again, and refuses any existing
+local/remote tag or GitHub Release.
+Published assets are never replaced; each DMG is accompanied by a SHA-256 file.
+Publishing refuses an ad-hoc signature by default. Until Developer ID signing
+and notarization are configured, a deliberate local/test release requires
+`VEFG_ALLOW_ADHOC_PUBLISH=1`; this does not make the build Gatekeeper-trusted.
 
 ### Install for daily use
 
@@ -40,8 +60,11 @@ open -a "Visual Capture for Grok"
 | `npm run dist` | `.app` + `.dmg` |
 | `npm run dist:dmg` | DMG target (rebuilds package as needed) |
 | `npm run build` | Renderer only (`dist/`) |
+| `npm run typecheck` | TypeScript validation without emit |
+| `npm run check` | Unit suites + typecheck + renderer build |
 | `npm run test:electron` | Production build + isolated Electron integration smoke |
 | `npm run test:packaged` | Same integration smoke against `release/mac-arm64/*.app` |
+| `npm run release:preflight` | Full integrity gate through codesign + verified DMG; not a notarization check |
 
 ## Config location
 
@@ -99,17 +122,18 @@ That is **out of scope** for the current local product.
 ## Verify a build
 
 ```bash
-# Structure
-ls "release/mac-arm64/Visual Capture for Grok.app/Contents/MacOS/"
-find "release/mac-arm64/Visual Capture for Grok.app" -name "pty.node" | head
-
-# Launch smoke
-open -a "release/mac-arm64/Visual Capture for Grok.app"
-# or
-open -a "Visual Capture for Grok"   # if installed to /Applications
+npm run release:preflight
 ```
 
-Expect: window titled **Visual Capture for Grok**, left terminal, right preview, toolbar Aim / Frame / Re-send.
+The same gate runs in `.github/workflows/ci.yml` on GitHub's macOS arm64 runner.
+For an already-built artifact, the core manual checks are:
+
+```bash
+codesign --verify --deep --strict --verbose=2 \
+  "release/mac-arm64/Visual Capture for Grok.app"
+hdiutil verify "release/Visual-Capture-for-Grok-<version>-arm64.dmg"
+npm run test:packaged
+```
 
 ## Artifacts & git
 

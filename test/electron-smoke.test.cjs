@@ -178,6 +178,7 @@ async function run() {
   const electronArgs = [
     `--remote-debugging-port=${debuggingPort}`,
     `--user-data-dir=${path.join(tmp, "profile")}`,
+    "--lang=en-US",
   ];
   // A background packaged window can lose its macOS overlay mailbox under CDP;
   // software compositing keeps capturePage deterministic for this headless smoke.
@@ -191,6 +192,8 @@ async function run() {
       env: {
         ...process.env,
         GROK_PATH: FAKE_GROK,
+        HOME: tmp,
+        LANG: "en_US.UTF-8",
         NODE_OPTIONS: "",
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -219,11 +222,19 @@ async function run() {
     );
     assert.strictEqual(initial.previewUrl, "", "fresh profile uses bundled welcome");
     assert.strictEqual(initial.previewStatus.isWelcome, true);
-    const initialUi = await shellClient.evaluate(`(() => ({
-      url: document.querySelector('[aria-label="Preview URL"]')?.value,
-      aimDisabled: document.querySelector('[aria-label="Aim at page element"]')?.disabled,
-      hasOnboarding: document.body.innerText.includes("First capture")
-    }))()`);
+    const initialUi = await waitFor(
+      () => shellClient.evaluate(`(() => {
+        const url = document.querySelector('.url-input');
+        const aim = document.querySelector('.btn-pick');
+        const onboarding = document.querySelector('.setup-inline');
+        return url && aim && onboarding ? {
+          url: url.value,
+          aimDisabled: aim.disabled,
+          hasOnboarding: true
+        } : null;
+      })()`),
+      "React shell did not render initial controls",
+    );
     assert.deepStrictEqual(initialUi, {
       url: "",
       aimDisabled: true,
@@ -299,7 +310,14 @@ async function run() {
 
     const welcomeClient = await connectTarget(
       debuggingPort,
-      (target) => target.type === "page" && target.url.endsWith("/welcome.html"),
+      (target) => {
+        try {
+          return target.type === "page" &&
+            new URL(target.url).pathname.endsWith("/welcome.html");
+        } catch {
+          return false;
+        }
+      },
       "welcome preview target",
     );
     assert.strictEqual(await welcomeClient.evaluate("typeof require"), "undefined");
@@ -442,7 +460,45 @@ async function run() {
     );
     assert.strictEqual(rejectedThumbnail.dataUrl, null);
 
+    await previewClient.evaluate(`(() => {
+      const target = document.querySelector("#target");
+      target.textContent = "Updated target";
+      target.style.backgroundColor = "rgb(22, 163, 74)";
+      return true;
+    })()`);
+    const verification = await shellClient.evaluate(
+      `(async () => window.vefg.verify())()`,
+    );
+    assert.strictEqual(verification.verifyPair.comparison.changed, true);
+    assert.ok(
+      fs.existsSync(verification.verifyPair.before.screenshotPath),
+      "Verify before image missing",
+    );
+    assert.ok(
+      fs.existsSync(verification.verifyPair.after.screenshotPath),
+      "Verify after image missing",
+    );
+    state = await shellClient.evaluate("window.vefg.getState()");
+    assert.strictEqual(state.lastVerifyPair.comparison.changed, true);
+    await waitFor(
+      () =>
+        shellClient.evaluate(
+          `document.querySelectorAll('.verify-images img').length === 2`,
+        ),
+      "Before / After thumbnails did not render",
+    );
+    const verificationDelivery = await shellClient.evaluate(
+      `(async () => window.vefg.deliverVerification())()`,
+    );
+    assert.strictEqual(verificationDelivery.copied, true);
+
     assert.strictEqual(state.previewStatus.hasCurrentTarget, true);
+    const phoneViewport = await shellClient.evaluate(
+      `(async () => window.vefg.setViewport({presetId:"phone390",orientation:"portrait"}))()`,
+    );
+    assert.strictEqual(phoneViewport.viewportPreset, "phone390");
+    assert.strictEqual(phoneViewport.emulatedViewport.width, 390);
+    assert.strictEqual(phoneViewport.emulatedViewport.height, 844);
     const targetFrameMode = await shellClient.evaluate(
       `(async () => window.vefg.setFrameMode("target-context"))()`,
     );
@@ -454,6 +510,7 @@ async function run() {
       return next.lastScreenshotPath !== beforeTargetShortcut ? next : null;
     }, "preview-focused target-context Frame shortcut did not run");
     assert.strictEqual(state.lastCaptureMeta.captureMode, "target-context");
+    assert.strictEqual(state.lastCaptureMeta.viewportPreset, "phone390");
     assert.strictEqual(state.lastSelection?.id, "target");
 
     const firstShot = state.lastScreenshotPath;
@@ -645,6 +702,45 @@ async function run() {
       return next.pickMode ? null : next;
     }, "Escape did not cancel Aim");
 
+    previewClient.close();
+    previewClient = null;
+    const historyBeforePrivate = state.recentPreviewUrls;
+    const privateStatus = await shellClient.evaluate(
+      `(async () => window.vefg.setPrivateMode(true))()`,
+    );
+    assert.strictEqual(privateStatus.privateMode, true);
+    state = await waitFor(async () => {
+      const next = await shellClient.evaluate("window.vefg.getState()");
+      return next.privateMode && !next.previewStatus.loading ? next : null;
+    }, "private preview did not settle");
+    const privateUrl = `${demoUrl}private?token=do-not-persist`;
+    await shellClient.evaluate(
+      `(async () => window.vefg.navigate(${JSON.stringify(privateUrl)}))()`,
+    );
+    state = await waitFor(async () => {
+      const next = await shellClient.evaluate("window.vefg.getState()");
+      return next.previewStatus.url === privateUrl &&
+        !next.previewStatus.loading ? next : null;
+    }, "private preview navigation did not settle");
+    assert.deepStrictEqual(state.recentPreviewUrls, historyBeforePrivate);
+    const clearedPreview = await shellClient.evaluate(
+      `(async () => window.vefg.clearPreviewData("all"))()`,
+    );
+    assert.strictEqual(clearedPreview.ok, true);
+    const diagnostics = await shellClient.evaluate(
+      `(async () => window.vefg.copyDiagnostics())()`,
+    );
+    assert.strictEqual(diagnostics.ok, true);
+    const persistentStatus = await shellClient.evaluate(
+      `(async () => window.vefg.setPrivateMode(false))()`,
+    );
+    assert.strictEqual(persistentStatus.privateMode, false);
+    state = await waitFor(async () => {
+      const next = await shellClient.evaluate("window.vefg.getState()");
+      return next.previewStatus.url === secondUrl &&
+        !next.previewStatus.loading ? next : null;
+    }, "private mode did not restore the last persistent page");
+
     console.log(
       `ok  - ${packagedBinary ? "Packaged" : "Electron"} secure picker / navigation / recovery / splitter / cwd / Grok / shortcut smoke`,
     );
@@ -654,11 +750,17 @@ async function run() {
   } finally {
     shellClient?.close();
     previewClient?.close();
-    child.kill("SIGTERM");
-    await Promise.race([
-      new Promise((resolve) => child.once("exit", resolve)),
-      delay(2_000),
-    ]);
+    if (child.exitCode == null && child.signalCode == null) {
+      child.kill("SIGTERM");
+      await Promise.race([
+        new Promise((resolve) => child.once("exit", resolve)),
+        delay(2_000),
+      ]);
+    }
+    if (child.exitCode == null && child.signalCode == null) {
+      child.kill("SIGKILL");
+      await new Promise((resolve) => child.once("exit", resolve));
+    }
     await new Promise((resolve) => demoServer.close(resolve));
     fs.rmSync(tmp, { recursive: true, force: true });
   }

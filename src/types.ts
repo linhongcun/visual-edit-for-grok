@@ -7,7 +7,7 @@ export interface ElementSelection {
   domPath?: string;
   text: string;
   attributes: Record<string, string>;
-  outerHTML: string;
+  outerHTML?: string;
   computedStyle: Record<string, string>;
   boundingBox: {
     x: number;
@@ -20,6 +20,20 @@ export interface ElementSelection {
   pageUrl: string;
   pageTitle: string;
   timestamp: number;
+  captureContext?: {
+    navigationId?: number;
+    navigationToken?: string;
+    sourceId?: number;
+    pageUrl?: string;
+    viewport?: {
+      width?: number;
+      height?: number;
+      devicePixelRatio?: number;
+      scrollX?: number;
+      scrollY?: number;
+    };
+    scroll?: { x?: number; y?: number };
+  };
 }
 
 export interface StyleChange {
@@ -31,6 +45,22 @@ export interface StyleChange {
 export type StyleDiffMap = Record<string, StyleChange>;
 
 export type FrameMode = "viewport" | "target-context";
+export type ViewportPresetId =
+  | "fit"
+  | "desktop"
+  | "laptop"
+  | "tablet"
+  | "phone390"
+  | "phone375";
+export type ViewportOrientation = "portrait" | "landscape";
+
+export interface ViewportPreset {
+  id: ViewportPresetId;
+  label: string;
+  width: number | null;
+  height: number | null;
+  mobile: boolean;
+}
 
 /**
  * `ready` is only used when the main process has an explicit readiness signal.
@@ -61,6 +91,10 @@ export interface PreviewStatus {
   navigationId?: number;
   selectionStale?: boolean;
   hasCurrentTarget?: boolean;
+  viewportPreset?: ViewportPresetId;
+  viewportOrientation?: ViewportOrientation;
+  emulatedViewport?: ViewportPreset & { orientation?: string };
+  privateMode?: boolean;
 }
 
 export interface TerminalStatus {
@@ -84,14 +118,56 @@ export interface CaptureReceiptState {
   selection?: ElementSelection | null;
   screenshotPath?: string | null;
   pageUrl?: string;
+  previewUrl?: string;
   pageTitle?: string;
   capturedAt?: number;
   captureMode?: FrameMode;
   deliveryStatus?: string;
+  targetSessionId?: string;
+  targetSessionLabel?: string;
+  viewportPreset?: ViewportPresetId;
+  viewportOrientation?: ViewportOrientation;
+  emulatedViewport?: ViewportPreset & { orientation?: string };
+}
+
+export interface VerificationComparison {
+  targetFound: boolean;
+  changed: boolean;
+  geometryChanged?: boolean;
+  geometryDelta?: Record<string, number>;
+  textChanged?: boolean;
+  identityChanged?: boolean;
+  attributeChanges?: string[];
+  styleChanges?: Array<{ property: string; before: string; after: string }>;
+  summary: string[];
+}
+
+export interface CaptureReference {
+  selection: ElementSelection | null;
+  screenshotPath: string | null;
+  captureMeta: CaptureReceiptState | null;
+}
+
+export interface VerifyPair {
+  before: CaptureReference | null;
+  after: CaptureReference | null;
+  comparison?: VerificationComparison | null;
+  verifiedAt: number;
+  targetSessionId?: string;
+  targetCwd?: string;
+  targetLabel?: string;
 }
 
 export interface CaptureResult {
-  kind: "selection" | "screenshot" | "recopy" | "deliver" | "error";
+  kind:
+    | "selection"
+    | "screenshot"
+    | "recopy"
+    | "deliver"
+    | "workspace"
+    | "verify"
+    | "verify-deliver"
+    | "error";
   selection?: ElementSelection | null;
   copied?: boolean;
   pastedToTerminal?: boolean;
@@ -114,7 +190,10 @@ export interface CaptureResult {
   captureMode?: FrameMode;
   capturedAt?: number;
   pageUrl?: string;
+  previewUrl?: string;
   pageTitle?: string;
+  viewportPreset?: ViewportPresetId;
+  viewportOrientation?: ViewportOrientation;
   deliveryStatus?: string;
   /** Stable outcome kind from classifyDeliveryOutcome (never chip-confirmed). */
   deliveryOutcome?:
@@ -134,6 +213,11 @@ export interface CaptureResult {
   grokReady?: boolean | null;
   grokState?: GrokRuntimeState | string;
   captureMeta?: CaptureReceiptState | null;
+  verifyPair?: VerifyPair | null;
+  targetSessionId?: string | null;
+  targetSessionLabel?: string | null;
+  targetCwd?: string | null;
+  imageAttachmentsAttempted?: number;
   message?: string;
   awaitEnrichment?: boolean;
 }

@@ -15,6 +15,7 @@ High-ROI trust polish implemented after the Codex-inspired pass.
 
 Shipped pure module: `electron/operator-guidance.cjs`.
 
-## Non-goals (still out of scope)
+## Remaining non-goals
 
-GitHub DMG/notarization, Grok table algorithms, OCR readiness, full redesign.
+Developer ID signing/notarization, Grok table algorithms, OCR readiness and a
+full redesign. GitHub DMG publishing itself shipped in 0.6.0.

@@ -7,13 +7,19 @@ contextBridge.exposeInMainWorld("vefg", {
   reload: () => ipcRenderer.invoke("preview:reload"),
   goBack: () => ipcRenderer.invoke("preview:go-back"),
   goForward: () => ipcRenderer.invoke("preview:go-forward"),
+  setViewport: (opts) => ipcRenderer.invoke("preview:set-viewport", opts || {}),
+  setPrivateMode: (enabled) =>
+    ipcRenderer.invoke("preview:set-private-mode", Boolean(enabled)),
+  clearPreviewData: (scope) =>
+    ipcRenderer.invoke("preview:clear-data", scope || "all"),
   setPickMode: (enabled) => ipcRenderer.invoke("preview:set-pick-mode", enabled),
 
   screenshot: (options) =>
     ipcRenderer.invoke("capture:screenshot", options || {}),
   recopy: (enrichment) => ipcRenderer.invoke("capture:recopy", enrichment || {}),
-  deliver: (enrichment) =>
-    ipcRenderer.invoke("capture:deliver", enrichment || {}),
+  deliver: () => ipcRenderer.invoke("capture:deliver"),
+  verify: () => ipcRenderer.invoke("capture:verify"),
+  deliverVerification: () => ipcRenderer.invoke("capture:verify-deliver"),
   openCaptureFolder: () => ipcRenderer.invoke("capture:open-folder"),
   captureThumbnail: (capturePath) =>
     ipcRenderer.invoke("capture:thumbnail", capturePath),
@@ -22,6 +28,8 @@ contextBridge.exposeInMainWorld("vefg", {
     ipcRenderer.invoke("capture:set-auto-paste", enabled),
   setFrameMode: (mode) => ipcRenderer.invoke("capture:set-frame-mode", mode),
   setLocale: (locale) => ipcRenderer.invoke("app:set-locale", locale),
+  copyDiagnostics: () => ipcRenderer.invoke("app:copy-diagnostics"),
+  checkUpdates: () => ipcRenderer.invoke("app:check-updates"),
   openExternal: (url) => ipcRenderer.invoke("shell:open-external", url),
 
   pickProjectDir: () => ipcRenderer.invoke("project:pick-cwd"),

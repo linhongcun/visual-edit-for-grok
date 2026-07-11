@@ -67,6 +67,33 @@ function testNormalizeSessionList() {
   assert.strictEqual(multi.sessions[1].cwd, "/b");
 }
 
+function testSessionWorkspaceStateSurvivesNormalizationAndSnapshot() {
+  const source = {
+    id: "t-workspace",
+    cwd: "/projects/app",
+    label: "app",
+    previewUrl: "http://localhost:5173/page",
+    viewportPreset: "mobile-390",
+    lastSelection: { selector: "#cta" },
+    lastScreenshotPath: "/captures/cta.png",
+    lastCaptureMeta: { kind: "selection" },
+    verifyPair: {
+      before: { screenshotPath: "/captures/cta.png" },
+      after: { screenshotPath: "/captures/cta-after.png" },
+      verifiedAt: 42,
+    },
+  };
+  const normalized = normalizeSessionList([source], "/fallback").sessions[0];
+  assert.strictEqual(normalized.previewUrl, "http://localhost:5173/page");
+  assert.strictEqual(normalized.viewportPreset, "mobile-390");
+  assert.strictEqual(normalized.lastSelection.selector, "#cta");
+  assert.strictEqual(normalized.verifyPair.after.screenshotPath, "/captures/cta-after.png");
+
+  const snap = sessionsSnapshot([normalized], "t-workspace");
+  assert.strictEqual(snap.sessions[0].lastScreenshotPath, "/captures/cta.png");
+  assert.strictEqual(snap.sessions[0].lastCaptureMeta.kind, "selection");
+}
+
 function testSessionsSnapshotAndAlive() {
   const snap = sessionsSnapshot(
     [
@@ -152,6 +179,7 @@ function run() {
     testCanCreateSessionCap,
     testNextActiveAfterClose,
     testNormalizeSessionList,
+    testSessionWorkspaceStateSurvivesNormalizationAndSnapshot,
     testSessionsSnapshotAndAlive,
     testDisambiguateSameBasename,
     testShouldConfirmCloseTab,
