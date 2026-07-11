@@ -2,6 +2,15 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.6.5] — 2026-07-11
+
+### Trackpad velocity that actually tracks flicks
+
+- Capture-phase `wheel` on the viewport (own events before xterm)
+- Batch pixel deltas per animation frame — fast flicks coalesce into large sums
+- Aggressive ease-in gain: slow ~2.5–3×, fast flicks up to ~20×+
+- Unit tests for per-event and per-frame gain curves
+
 ## [0.6.4] — 2026-07-11
 
 ### Velocity-proportional trackpad scroll

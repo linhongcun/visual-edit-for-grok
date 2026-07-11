@@ -3,7 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
-import { trackpadScrollPixels } from "../trackpad-scroll.cjs";
+import { trackpadScrollPixelsFromFrame } from "../trackpad-scroll.cjs";
 import "@xterm/xterm/css/xterm.css";
 
 /** Slightly smaller than 13 so the same pane fits more columns (helps wide CJK tables). */
@@ -51,8 +51,9 @@ export default function TerminalPane({
   const focusTimerRef = useRef<number | null>(null);
   const resizeTimerRef = useRef<number | null>(null);
   const sessionIdRef = useRef(sessionId);
-  /** Last wheel timestamp for trackpad velocity (px/ms) */
-  const lastWheelAtRef = useRef(0);
+  /** Pixel-mode deltaY summed within the current animation frame */
+  const wheelFrameDeltaRef = useRef(0);
+  const wheelFrameRafRef = useRef<number | null>(null);
 
   useEffect(() => {
     sessionIdRef.current = sessionId;
@@ -210,33 +211,63 @@ export default function TerminalPane({
     termRef.current = term;
     fitRef.current = fit;
     lastDimsRef.current = { cols: term.cols, rows: term.rows };
-    lastWheelAtRef.current = 0;
+    wheelFrameDeltaRef.current = 0;
 
     /**
-     * Velocity-proportional trackpad scroll via viewport.scrollTop
-     * (same mechanism as xterm, with dynamic gain).
-     * Return `false` so xterm skips its default low-gain handler.
+     * Own wheel in capture phase on the viewport so we always see raw
+     * trackpad deltas (xterm's default path feels velocity-capped).
+     * Pixel deltas are batched per animation frame: a fast flick dumps a
+     * large sum into one frame → high gain; a slow glide keeps small sums.
      */
-    term.attachCustomWheelEventHandler((ev) => {
-      if (ev.shiftKey || ev.deltaY === 0) return true;
-      if (
-        Math.abs(ev.deltaX) > Math.abs(ev.deltaY) &&
-        Math.abs(ev.deltaX) > 1
-      ) {
-        return true;
-      }
+    const viewportEl = term.element?.querySelector(
+      ".xterm-viewport",
+    ) as HTMLElement | null;
 
+    const flushWheelFrame = () => {
+      wheelFrameRafRef.current = null;
       const viewport = term.element?.querySelector(
         ".xterm-viewport",
       ) as HTMLElement | null;
-      if (!viewport) return true;
-
+      if (!viewport) {
+        wheelFrameDeltaRef.current = 0;
+        return;
+      }
       const maxScroll = Math.max(
         0,
         viewport.scrollHeight - viewport.clientHeight,
       );
-      // Alt-buffer / no overflow: let xterm map wheel to app cursor keys
-      if (maxScroll < 1) return true;
+      if (maxScroll < 1) {
+        wheelFrameDeltaRef.current = 0;
+        return;
+      }
+      const frameDelta = wheelFrameDeltaRef.current;
+      wheelFrameDeltaRef.current = 0;
+      if (frameDelta === 0) return;
+
+      const pixels = trackpadScrollPixelsFromFrame(frameDelta);
+      if (pixels === 0) return;
+      viewport.scrollTop = Math.min(
+        maxScroll,
+        Math.max(0, viewport.scrollTop + pixels),
+      );
+    };
+
+    const onViewportWheel = (ev: WheelEvent) => {
+      if (ev.shiftKey || ev.deltaY === 0) return;
+      if (
+        Math.abs(ev.deltaX) > Math.abs(ev.deltaY) &&
+        Math.abs(ev.deltaX) > 1
+      ) {
+        return;
+      }
+
+      const viewport = ev.currentTarget as HTMLElement;
+      const maxScroll = Math.max(
+        0,
+        viewport.scrollHeight - viewport.clientHeight,
+      );
+      // No overflow (alt buffer / full-screen TUI): do not steal the event
+      if (maxScroll < 1) return;
 
       const rowPx = Math.max(
         10,
@@ -244,26 +275,60 @@ export default function TerminalPane({
           Math.max(1, term.rows),
       );
 
-      const now = performance.now();
-      const dt =
-        lastWheelAtRef.current > 0 ? now - lastWheelAtRef.current : 16;
-      lastWheelAtRef.current = now;
+      // Normalize all modes into pixel-space before batching
+      let pixelDelta = 0;
+      if (ev.deltaMode === WheelEvent.DOM_DELTA_LINE) {
+        pixelDelta = ev.deltaY * rowPx;
+      } else if (ev.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
+        pixelDelta = ev.deltaY * viewport.clientHeight;
+      } else {
+        pixelDelta = ev.deltaY;
+      }
+      // Some Electron builds expose a larger wheelDeltaY; use the stronger signal
+      const wheelDeltaY =
+        typeof (ev as WheelEvent & { wheelDeltaY?: number }).wheelDeltaY ===
+        "number"
+          ? (ev as WheelEvent & { wheelDeltaY?: number }).wheelDeltaY || 0
+          : 0;
+      if (wheelDeltaY !== 0 && Math.abs(wheelDeltaY) / 3 > Math.abs(pixelDelta)) {
+        // Legacy wheelDeltaY is inverted vs deltaY and ~3× CSS pixels
+        pixelDelta = -wheelDeltaY / 3;
+      }
 
-      const pixels = trackpadScrollPixels(
-        ev.deltaY,
-        ev.deltaMode,
-        rowPx,
-        viewport.clientHeight,
-        dt,
-      );
-      if (pixels === 0) return true;
+      if (pixelDelta === 0) return;
 
-      const next = Math.min(
-        maxScroll,
-        Math.max(0, viewport.scrollTop + pixels),
-      );
-      viewport.scrollTop = next;
+      // Batch into one scrollTop write per frame — flicks coalesce into big sums
+      wheelFrameDeltaRef.current += pixelDelta;
+      if (wheelFrameRafRef.current == null) {
+        wheelFrameRafRef.current =
+          window.requestAnimationFrame(flushWheelFrame);
+      }
+
       ev.preventDefault();
+      ev.stopPropagation();
+      // Prevent xterm's own bubble handler from applying a second low-gain scroll
+      ev.stopImmediatePropagation();
+    };
+
+    if (viewportEl) {
+      viewportEl.addEventListener("wheel", onViewportWheel, {
+        passive: false,
+        capture: true,
+      });
+    }
+    // Block xterm default wheel when we own scrolling (scrollback present)
+    term.attachCustomWheelEventHandler((ev) => {
+      const viewport = term.element?.querySelector(
+        ".xterm-viewport",
+      ) as HTMLElement | null;
+      if (!viewport) return true;
+      const maxScroll = Math.max(
+        0,
+        viewport.scrollHeight - viewport.clientHeight,
+      );
+      if (maxScroll < 1) return true;
+      // We already handled (or will handle) on the capture listener
+      if (ev.defaultPrevented) return false;
       return false;
     });
 
@@ -332,6 +397,14 @@ export default function TerminalPane({
     return () => {
       clearFocusTimer();
       clearResizeTimer();
+      if (wheelFrameRafRef.current != null) {
+        window.cancelAnimationFrame(wheelFrameRafRef.current);
+        wheelFrameRafRef.current = null;
+      }
+      wheelFrameDeltaRef.current = 0;
+      if (viewportEl) {
+        viewportEl.removeEventListener("wheel", onViewportWheel, true);
+      }
       onData();
       onExit();
       onFocusReq();

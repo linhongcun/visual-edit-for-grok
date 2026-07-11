@@ -4,44 +4,54 @@
 const assert = require("assert");
 const {
   trackpadScrollPixels,
+  trackpadScrollPixelsFromFrame,
 } = require("../src/trackpad-scroll.cjs");
 
 function testZeroDelta() {
   assert.strictEqual(trackpadScrollPixels(0, 0, 14, 400, 16), 0);
+  assert.strictEqual(trackpadScrollPixelsFromFrame(0), 0);
 }
 
-function testSlowPixelIsNearLinear() {
-  // Small delta, relaxed timing → gain close to ~1.x
-  const px = trackpadScrollPixels(2, 0, 14, 400, 24);
-  const gain = Math.abs(px / 2);
-  assert.ok(gain >= 0.9 && gain <= 2.2, `slow gain should be modest, got ${gain}`);
-  assert.ok(px > 0, "sign preserved");
+function testSlowIsUsableButNotHuge() {
+  // Tiny glide: a few px/event, relaxed timing
+  const px = Math.abs(trackpadScrollPixels(2, 0, 14, 400, 24));
+  const gain = px / 2;
+  assert.ok(gain >= 2.5 && gain <= 8, `slow gain out of range: ${gain}`);
 }
 
-function testFastFlickGainsMoreThanSlow() {
-  const slow = Math.abs(trackpadScrollPixels(3, 0, 14, 400, 30));
-  const fast = Math.abs(trackpadScrollPixels(40, 0, 14, 400, 8));
-  // Per-unit gain should be higher for the fast/large gesture
-  const slowGain = slow / 3;
-  const fastGain = fast / 40;
+function testFastFlickMuchFasterThanSlow() {
+  const slow = Math.abs(trackpadScrollPixels(2, 0, 14, 400, 30));
+  // Fast: large delta, short interval (typical flick sample)
+  const fast = Math.abs(trackpadScrollPixels(12, 0, 14, 400, 5));
+  const slowGain = slow / 2;
+  const fastGain = fast / 12;
   assert.ok(
-    fastGain > slowGain * 1.3,
-    `fast gain (${fastGain}) should exceed slow gain (${slowGain})`,
+    fastGain > slowGain * 1.8,
+    `fast gain (${fastGain.toFixed(2)}) should clearly beat slow (${slowGain.toFixed(2)})`,
   );
-  // Absolute travel of a flick should dominate a tiny glide
-  assert.ok(fast > slow * 5, "fast flick moves much farther");
+  assert.ok(fast > slow * 4, "absolute travel of a flick sample dominates a glide sample");
+}
+
+function testFrameBatchBoostsFlicks() {
+  const slowFrame = Math.abs(trackpadScrollPixelsFromFrame(8));
+  const flickFrame = Math.abs(trackpadScrollPixelsFromFrame(120));
+  assert.ok(
+    flickFrame / 120 > (slowFrame / 8) * 1.5,
+    "frame-level flick gain should exceed slow-frame gain",
+  );
+  assert.ok(flickFrame > 800, "a strong flick frame should move a lot of viewport");
 }
 
 function testDirectionPreserved() {
-  const up = trackpadScrollPixels(-20, 0, 14, 400, 10);
-  const down = trackpadScrollPixels(20, 0, 14, 400, 10);
+  const up = trackpadScrollPixels(-15, 0, 14, 400, 8);
+  const down = trackpadScrollPixels(15, 0, 14, 400, 8);
   assert.ok(up < 0 && down > 0);
   assert.ok(Math.abs(Math.abs(up) - Math.abs(down)) < 1e-6);
 }
 
 function testLineAndPageModes() {
   const line = trackpadScrollPixels(2, 1, 14, 400, 16);
-  assert.strictEqual(line, 2 * 14 * 2.5);
+  assert.strictEqual(line, 2 * 14 * 4);
   const page = trackpadScrollPixels(1, 2, 14, 400, 16);
   assert.strictEqual(page, 400);
 }
@@ -49,8 +59,9 @@ function testLineAndPageModes() {
 function run() {
   const tests = [
     testZeroDelta,
-    testSlowPixelIsNearLinear,
-    testFastFlickGainsMoreThanSlow,
+    testSlowIsUsableButNotHuge,
+    testFastFlickMuchFasterThanSlow,
+    testFrameBatchBoostsFlicks,
     testDirectionPreserved,
     testLineAndPageModes,
   ];
