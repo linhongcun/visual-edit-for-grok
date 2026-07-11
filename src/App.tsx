@@ -500,7 +500,10 @@ export default function App() {
         if (k === "a" || k === "f" || k === "v") {
           e.preventDefault();
           if (captureBusyRef.current) {
-            setToast(t(localeRef.current, "toast.busyShortcut"));
+            // Match main busy guidance: message + next step
+            setToast(
+              `${t(localeRef.current, "error.busy")} ${t(localeRef.current, "error.next.wait")}`,
+            );
             return;
           }
           if (k === "a") void togglePickRef.current();

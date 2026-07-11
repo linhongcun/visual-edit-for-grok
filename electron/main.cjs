@@ -338,9 +338,11 @@ function setCaptureBusy(busy) {
 async function withCaptureLock(fn) {
   const gate = canStartCapture({ inFlight: captureInFlight });
   if (!gate.ok) {
+    // Always use actionable busy text (message + next step), not bare main.busy
+    const busyText = actionableError({ code: "busy" }).text;
     return {
       busy: true,
-      statusMessage: tr("main.busy"),
+      statusMessage: busyText,
     };
   }
   setCaptureBusy(true);
@@ -349,6 +351,11 @@ async function withCaptureLock(fn) {
   } finally {
     setCaptureBusy(false);
   }
+}
+
+/** Busy / single-flight user message with next-step guidance. */
+function busyActionableText() {
+  return actionableError({ code: "busy" }).text;
 }
 
 /** Deferred, throttled capture-dir maintenance (not on pick critical path). */
@@ -726,7 +733,9 @@ async function handleTrustedAimSelection(rawSelection) {
     await clearPickerOverlay();
     sendToRenderer("capture:result", {
       kind: "error",
-      message: plan.statusMessage || tr("main.aimBusy"),
+      message: plan.reason === "busy"
+        ? busyActionableText()
+        : plan.statusMessage || busyActionableText(),
     });
     return;
   }
@@ -1680,9 +1689,7 @@ async function captureScreenshot(options = {}) {
     };
   });
   if (locked && locked.busy) {
-    throw new Error(
-      locked.statusMessage || actionableError({ code: "busy" }).text,
-    );
+    throw new Error(locked.statusMessage || busyActionableText());
   }
   // On throw inside lock, prev pair is untouched (takeScreenshotFile no longer mutates)
   if (locked?.pastedToTerminal) {
@@ -1721,7 +1728,7 @@ async function resendLastCaptureAndNotify() {
     }),
   );
   if (locked?.busy) {
-    const message = locked.statusMessage || tr("main.busy");
+    const message = locked.statusMessage || busyActionableText();
     sendToRenderer("capture:result", { kind: "error", message });
     return { ok: false, message };
   }
@@ -2031,11 +2038,12 @@ function registerIpc() {
       }),
     );
     if (locked && locked.busy) {
+      const message = locked.statusMessage || busyActionableText();
       sendToRenderer("capture:result", {
         kind: "error",
-        message: locked.statusMessage,
+        message,
       });
-      throw new Error(locked.statusMessage);
+      throw new Error(message);
     }
     sendToRenderer("capture:result", {
       kind: "recopy",

@@ -78,6 +78,17 @@ function testBuildActionableIncludesNextStep() {
   }
 }
 
+/** Busy text used by withCaptureLock / resend / recopy must include next-step wait guidance. */
+function testBusyActionableTextIncludesWaitNextStep() {
+  const r = buildActionableError({ code: "busy", locale: "en" });
+  assert.strictEqual(r.code, "busy");
+  assert.ok(r.text.includes(r.message));
+  assert.ok(/wait/i.test(r.nextStep), r.nextStep);
+  assert.ok(r.text.includes(r.nextStep));
+  // Must not be the bare short phrase alone without next step
+  assert.ok(r.text.length > r.message.length);
+}
+
 function testBuildActionableZhHasNextStep() {
   const r = buildActionableError({ code: "nothing-to-resend", locale: "zh" });
   assert.strictEqual(r.code, "nothing-to-resend");
@@ -115,6 +126,7 @@ function run() {
     testInferGrokMissing,
     testInferTerminalStartFail,
     testBuildActionableIncludesNextStep,
+    testBusyActionableTextIncludesWaitNextStep,
     testBuildActionableZhHasNextStep,
     testShouldConfirmQuit,
     testStatusLabelKeysSeparateShellAndGrok,
