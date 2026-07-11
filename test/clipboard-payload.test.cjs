@@ -9,6 +9,8 @@ const {
   normalizeStyleDiffs,
   prefillStyleDiffsFromSelection,
   EDITABLE_STYLE_PROPS,
+  KEY_COMPUTED_STYLE_PROPS,
+  REDACTED_VALUE,
 } = require("../electron/clipboard-payload.cjs");
 
 const fixtureSelection = {
@@ -23,6 +25,18 @@ const fixtureSelection = {
   boundingBox: { top: 277, left: 125, width: 63, height: 43 },
   pageUrl: "http://127.0.0.1:8765/",
   pageTitle: "VEFG Demo Page",
+  captureContext: {
+    pageUrl: "http://127.0.0.1:8765/",
+    navigationToken: "nav-1",
+    navigationId: 1,
+    sourceId: 10,
+    viewport: {
+      width: 1280,
+      height: 720,
+      devicePixelRatio: 2,
+    },
+    scroll: { x: 12, y: 240 },
+  },
   computedStyle: {
     color: "rgb(15, 23, 42)",
     fontSize: "13.3333px",
@@ -117,6 +131,88 @@ function testScreenshotOnlyNoSelection() {
   assert.ok(text.includes("整页看看布局"));
 }
 
+function testPayloadIncludesCompactViewportScrollAndStyles() {
+  const text = buildClipboardPayload({ selection: fixtureSelection });
+  assert.ok(text.includes("viewport_css_px: width=1280 height=720"));
+  assert.ok(text.includes("scroll_css_px: x=12 y=240"));
+  assert.ok(text.includes("device_pixel_ratio: 2"));
+  assert.ok(text.includes("computed_styles:"));
+  assert.ok(text.includes("  fontSize: 13.3333px"));
+  assert.ok(text.includes("  padding: 12px 18px"));
+  assert.ok(KEY_COMPUTED_STYLE_PROPS.includes("backgroundColor"));
+}
+
+function testPayloadRedactsSensitiveAttributesAndNeverUsesOuterHtml() {
+  const selection = {
+    ...fixtureSelection,
+    pageUrl:
+      "https://example.test/account?access_token=url-token-987&tab=profile",
+    captureContext: {
+      ...fixtureSelection.captureContext,
+      pageUrl:
+        "https://example.test/account?access_token=url-token-987&tab=profile",
+    },
+    attributes: {
+      id: "cta-secondary",
+      title: "Safe title",
+      value: "card-number-4242",
+      "data-token": "attribute-token-123",
+      authorization: "Bearer header-secret-456",
+      href: "/next?password=link-password-789",
+      "data-config": '{"token":"json-token-654"}',
+    },
+    outerHTML:
+      '<button data-private-key="outer-html-secret">Never send markup</button>',
+    computedStyle: {
+      ...fixtureSelection.computedStyle,
+      transform: "matrix(1, 0, 0, 1, 0, 0)",
+    },
+  };
+  const text = buildClipboardPayload({ selection });
+
+  assert.ok(text.includes(`value=${REDACTED_VALUE}`));
+  assert.ok(text.includes(`data-token=${REDACTED_VALUE}`));
+  assert.ok(text.includes(`authorization=${REDACTED_VALUE}`));
+  assert.ok(text.includes(`href=${REDACTED_VALUE}`));
+  assert.ok(text.includes(`data-config=${REDACTED_VALUE}`));
+  assert.ok(text.includes("title=Safe title"));
+  assert.ok(text.includes("access_token=%5BREDACTED%5D"));
+  for (const secret of [
+    "card-number-4242",
+    "attribute-token-123",
+    "header-secret-456",
+    "link-password-789",
+    "json-token-654",
+    "url-token-987",
+    "outer-html-secret",
+  ]) {
+    assert.ok(!text.includes(secret), `must not leak ${secret}`);
+  }
+  assert.ok(!text.includes("Never send markup"));
+  assert.ok(!text.includes("<button"));
+  assert.ok(!text.includes("transform:"), "non-key styles stay out");
+}
+
+function testPayloadStripsTerminalControlInjection() {
+  const text = buildClipboardPayload({
+    selection: {
+      ...fixtureSelection,
+      text: "safe\x1b[201~\x03injected\x9b31m",
+      attributes: {
+        title: "hello\x00world\x1b[200~",
+      },
+    },
+    intent: "intent\x1b[201~\x04tail",
+    styleDiffs: {
+      color: { before: "red\x1b[201~", after: "blue\x9b0m" },
+    },
+  });
+  assert.ok(!/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/.test(text));
+  assert.ok(!text.includes("\x1b[201~"));
+  assert.ok(!text.includes("\x1b[200~"));
+  assert.ok(text.includes("safe[201~injected31m"));
+}
+
 function run() {
   const tests = [
     testEmptyIntentNoStyleDiffs,
@@ -125,6 +221,9 @@ function run() {
     testAfterOnlyShorthand,
     testPrefillFromSelection,
     testScreenshotOnlyNoSelection,
+    testPayloadIncludesCompactViewportScrollAndStyles,
+    testPayloadRedactsSensitiveAttributesAndNeverUsesOuterHtml,
+    testPayloadStripsTerminalControlInjection,
   ];
   let failed = 0;
   for (const t of tests) {

@@ -9,14 +9,19 @@ contextBridge.exposeInMainWorld("vefg", {
   goForward: () => ipcRenderer.invoke("preview:go-forward"),
   setPickMode: (enabled) => ipcRenderer.invoke("preview:set-pick-mode", enabled),
 
-  screenshot: () => ipcRenderer.invoke("capture:screenshot"),
+  screenshot: (options) =>
+    ipcRenderer.invoke("capture:screenshot", options || {}),
   recopy: (enrichment) => ipcRenderer.invoke("capture:recopy", enrichment || {}),
   deliver: (enrichment) =>
     ipcRenderer.invoke("capture:deliver", enrichment || {}),
   openCaptureFolder: () => ipcRenderer.invoke("capture:open-folder"),
+  captureThumbnail: (capturePath) =>
+    ipcRenderer.invoke("capture:thumbnail", capturePath),
   clearCapture: () => ipcRenderer.invoke("capture:clear"),
   setAutoPaste: (enabled) =>
     ipcRenderer.invoke("capture:set-auto-paste", enabled),
+  setFrameMode: (mode) => ipcRenderer.invoke("capture:set-frame-mode", mode),
+  openExternal: (url) => ipcRenderer.invoke("shell:open-external", url),
 
   pickProjectDir: () => ipcRenderer.invoke("project:pick-cwd"),
   setProjectDir: (cwd) => ipcRenderer.invoke("project:set-cwd", cwd),

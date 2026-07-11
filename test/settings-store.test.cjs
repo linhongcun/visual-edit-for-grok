@@ -11,6 +11,7 @@ const {
   saveSettings,
   normalizeSettings,
   DEFAULTS,
+  SETTINGS_VERSION,
   defaultSettingsPath,
 } = require("../electron/settings-store.cjs");
 
@@ -38,6 +39,22 @@ function testNormalizeRejectsBadUrl() {
   assert.strictEqual(s.previewUrl, DEFAULTS.previewUrl);
 }
 
+function testMigratesLegacyDemoDefaultToWelcome() {
+  const migrated = normalizeSettings({
+    previewUrl: "http://127.0.0.1:8765",
+    projectCwd: "/tmp/project",
+  });
+  assert.strictEqual(migrated.settingsVersion, SETTINGS_VERSION);
+  assert.strictEqual(migrated.previewUrl, "");
+  assert.strictEqual(migrated.projectCwd, "/tmp/project");
+
+  const explicitCurrent = normalizeSettings({
+    settingsVersion: SETTINGS_VERSION,
+    previewUrl: "http://127.0.0.1:8765",
+  });
+  assert.strictEqual(explicitCurrent.previewUrl, "http://127.0.0.1:8765");
+}
+
 function testRoundTrip() {
   const file = tmpFile();
   try {
@@ -45,13 +62,24 @@ function testRoundTrip() {
       previewUrl: "http://127.0.0.1:5173/foo",
       projectCwd: "/Users/me/app",
       splitRatio: 0.4,
+      recentPreviewUrls: [
+        "http://127.0.0.1:5173/foo",
+        "https://example.com/app",
+      ],
+      recentProjectCwds: ["/Users/me/app", "/tmp/other"],
     });
     assert.strictEqual(saved.previewUrl, "http://127.0.0.1:5173/foo");
     const loaded = loadSettings(file);
     assert.deepStrictEqual(loaded, {
+      settingsVersion: SETTINGS_VERSION,
       previewUrl: "http://127.0.0.1:5173/foo",
       projectCwd: "/Users/me/app",
       splitRatio: 0.4,
+      recentPreviewUrls: [
+        "http://127.0.0.1:5173/foo",
+        "https://example.com/app",
+      ],
+      recentProjectCwds: ["/Users/me/app", "/tmp/other"],
     });
   } finally {
     try {
@@ -60,6 +88,21 @@ function testRoundTrip() {
       /* ignore */
     }
   }
+}
+
+function testRecentListsAreDedupedAndCapped() {
+  const s = normalizeSettings({
+    recentPreviewUrls: [
+      "http://localhost:3000/",
+      "http://localhost:3000/",
+      "javascript:alert(1)",
+      ...Array.from({ length: 10 }, (_, index) => `https://example.com/${index}`),
+    ],
+    recentProjectCwds: ["/tmp/a", "/tmp/a", "/tmp/b"],
+  });
+  assert.strictEqual(s.recentPreviewUrls.length, 8);
+  assert.strictEqual(s.recentPreviewUrls[0], "http://localhost:3000/");
+  assert.deepStrictEqual(s.recentProjectCwds, ["/tmp/a", "/tmp/b"]);
 }
 
 function testMissingFileDefaults() {
@@ -78,9 +121,11 @@ function run() {
   const tests = [
     testNormalizeClampsSplit,
     testNormalizeRejectsBadUrl,
+    testMigratesLegacyDemoDefaultToWelcome,
     testRoundTrip,
     testMissingFileDefaults,
     testDefaultPath,
+    testRecentListsAreDedupedAndCapped,
   ];
   let failed = 0;
   for (const t of tests) {

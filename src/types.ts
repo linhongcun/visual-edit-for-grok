@@ -30,6 +30,20 @@ export interface StyleChange {
 /** camelCase CSS keys → before/after */
 export type StyleDiffMap = Record<string, StyleChange>;
 
+export type FrameMode = "viewport" | "target-context";
+
+/**
+ * `ready` is only used when the main process has an explicit readiness signal.
+ * A successful launch request alone is represented by `launch-requested`.
+ */
+export type GrokRuntimeState =
+  | "idle"
+  | "launching"
+  | "launch-requested"
+  | "ready"
+  | "exited"
+  | "unknown";
+
 export interface EnrichmentPayload {
   intent?: string;
   styleDiffs?: StyleDiffMap;
@@ -41,6 +55,38 @@ export interface PreviewStatus {
   title?: string;
   loading?: boolean;
   error?: string | null;
+  canGoBack?: boolean;
+  canGoForward?: boolean;
+  isWelcome?: boolean;
+  navigationId?: number;
+  selectionStale?: boolean;
+  hasCurrentTarget?: boolean;
+}
+
+export interface TerminalStatus {
+  alive?: boolean;
+  shellAlive?: boolean;
+  terminalAlive?: boolean;
+  cwd?: string;
+  error?: string | null;
+  grokLaunchRequested?: boolean;
+  grokReady?: boolean | null;
+  grokReadiness?: "ready" | "unknown" | "unavailable" | string;
+  grokState?: GrokRuntimeState | string;
+  grokRunning?: boolean;
+  terminalMode?: "shell" | "grok" | null;
+}
+
+export interface CaptureReceiptState {
+  target?: string;
+  kind?: string;
+  selection?: ElementSelection | null;
+  screenshotPath?: string | null;
+  pageUrl?: string;
+  pageTitle?: string;
+  capturedAt?: number;
+  captureMode?: FrameMode;
+  deliveryStatus?: string;
 }
 
 export interface CaptureResult {
@@ -51,6 +97,8 @@ export interface CaptureResult {
   hasImage?: boolean;
   /** Grok TUI image chip via OS clipboard paste (true multimodal) */
   imageChip?: boolean;
+  imageChipAttempted?: boolean;
+  imageChipConfirmed?: boolean;
   imagePrepared?: boolean;
   multimodal?: boolean;
   fallback?: string | null;
@@ -60,6 +108,21 @@ export interface CaptureResult {
   text?: string;
   screenshotPath?: string | null;
   path?: string;
+  fullPath?: string;
+  cropped?: boolean;
+  captureMode?: FrameMode;
+  capturedAt?: number;
+  pageUrl?: string;
+  pageTitle?: string;
+  deliveryStatus?: string;
+  deliveryAttempted?: boolean;
+  deliveryConfirmed?: boolean;
+  shellAlive?: boolean;
+  grokReadiness?: "ready" | "unknown" | "unavailable" | string;
+  grokLaunchRequested?: boolean;
+  grokReady?: boolean | null;
+  grokState?: GrokRuntimeState | string;
+  captureMeta?: CaptureReceiptState | null;
   message?: string;
   awaitEnrichment?: boolean;
 }

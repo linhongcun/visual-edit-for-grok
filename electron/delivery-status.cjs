@@ -3,7 +3,11 @@
  * Used by main process and unit tests.
  *
  * @param {{
- *   terminalAlive: boolean,
+ *   terminalAlive?: boolean,
+ *   shellAlive?: boolean,
+ *   grokRunning?: boolean,
+ *   grokLaunchRequested?: boolean,
+ *   textPasteAttempted?: boolean,
  *   textPasted: boolean,
  *   imagePrepared: boolean,
  *   imageChipAttempted: boolean,
@@ -11,41 +15,91 @@
  * @returns {{
  *   pasted: boolean,
  *   imageChip: boolean,
+ *   imageChipAttempted: boolean,
+ *   imageChipConfirmed: false,
  *   imagePrepared: boolean,
+ *   shellAlive: boolean,
+ *   grokLaunchRequested: boolean,
+ *   grokRunning: boolean,
+ *   grokReadiness: "unknown" | "not-running" | "unavailable",
+ *   grokReady: null | false,
+ *   deliveryAttempted: boolean,
+ *   deliveryConfirmed: false,
  *   fallback: string | null,
  *   statusMessage: string,
  * }}
  */
-function buildPasteStatus(input) {
-  const terminalAlive = Boolean(input.terminalAlive);
+function buildPasteStatus(input = {}) {
+  // Backward compatibility: before shell/Grok state was split, terminalAlive
+  // meant the currently running PTY could receive Grok input.
+  const legacyTerminalAlive = Boolean(input.terminalAlive);
+  const grokRunning =
+    input.grokRunning == null
+      ? legacyTerminalAlive
+      : Boolean(input.grokRunning);
+  const shellAlive =
+    (input.shellAlive == null
+      ? legacyTerminalAlive
+      : Boolean(input.shellAlive)) || grokRunning;
+  const grokLaunchRequested = Boolean(input.grokLaunchRequested);
   const textPasted = Boolean(input.textPasted);
+  const textPasteAttempted =
+    input.textPasteAttempted == null
+      ? textPasted
+      : Boolean(input.textPasteAttempted);
   const imagePrepared = Boolean(input.imagePrepared);
   const imageChipAttempted = Boolean(input.imageChipAttempted);
+  const deliveryAttempted = textPasteAttempted || imageChipAttempted;
 
-  if (!terminalAlive) {
+  const common = {
+    imagePrepared,
+    imageChipAttempted,
+    // There is no Grok CLI acknowledgement today. Do not turn a Ctrl+V write
+    // into a claim that a chip appeared or that Grok received the payload.
+    imageChipConfirmed: false,
+    imageChip: false,
+    shellAlive,
+    grokRunning,
+    grokLaunchRequested,
+    grokReadiness: grokRunning
+      ? "unknown"
+      : shellAlive
+        ? "not-running"
+        : "unavailable",
+    grokReady: grokRunning ? null : false,
+    deliveryAttempted,
+    deliveryConfirmed: false,
+  };
+
+  if (!grokRunning) {
     return {
+      ...common,
       pasted: false,
-      imageChip: false,
-      imagePrepared,
       fallback: "clipboard-only",
-      statusMessage:
-        "Terminal not running — copied text+image. Start Grok, then click Re-send (or paste with ⌘V).",
+      statusMessage: shellAlive
+        ? "Shell is running, but Grok is not — copied text+image. Start Grok, then click Re-send (or paste with ⌘V)."
+        : "Terminal not running — copied text+image. Start Grok, then click Re-send (or paste with ⌘V).",
     };
   }
 
+  // Legacy field: `pasted` means bytes were accepted by the shell write path,
+  // not that Grok acknowledged receipt. New consumers should use the explicit
+  // attempted/confirmed fields above.
   const pasted = textPasted || imageChipAttempted;
   let statusMessage = "";
   let fallback = null;
 
   if (pasted && imageChipAttempted) {
     statusMessage =
-      "Sent to Grok (image chip attempted + DOM text). Type your change, then Enter.";
+      "Attempted image paste + DOM text write. Grok readiness and image attachment are unconfirmed — verify the prompt before submitting.";
+    fallback = "verify-image-paste";
   } else if (pasted && !imageChipAttempted && imagePrepared) {
     statusMessage =
-      "Text sent; image is on clipboard — press ⌘V in Grok if no image chip appeared.";
+      "DOM text was written to the shell; Grok readiness is unknown. The image is on the clipboard — press ⌘V if needed.";
     fallback = "manual-image-paste";
   } else if (pasted) {
-    statusMessage = "Text context sent to Grok. Type your change, then Enter.";
+    statusMessage =
+      "DOM context was written to the shell. Grok readiness and receipt are unconfirmed — verify the prompt before submitting.";
   } else {
     statusMessage =
       "Could not paste into terminal — text+image copied. Focus Grok and press ⌘V.";
@@ -53,12 +107,13 @@ function buildPasteStatus(input) {
   }
 
   return {
+    ...common,
     pasted,
-    imageChip: imageChipAttempted,
-    imagePrepared,
     fallback,
     statusMessage,
   };
 }
 
-module.exports = { buildPasteStatus };
+const buildDeliveryStatus = buildPasteStatus;
+
+module.exports = { buildPasteStatus, buildDeliveryStatus };

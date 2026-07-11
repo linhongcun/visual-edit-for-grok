@@ -7,7 +7,10 @@ const os = require("os");
 const path = require("path");
 const { buildClipboardPayload } = require("../electron/clipboard-payload.cjs");
 const { cleanupCaptureDir } = require("../electron/capture-cleanup.cjs");
-const { buildPasteStatus } = require("../electron/delivery-status.cjs");
+const {
+  buildPasteStatus,
+  buildDeliveryStatus,
+} = require("../electron/delivery-status.cjs");
 
 function testPayloadHasElementAndShotMultimodalHint() {
   const text = buildClipboardPayload({
@@ -28,7 +31,7 @@ function testPayloadHasElementAndShotMultimodalHint() {
   assert.ok(text.includes("browser_element"));
   assert.ok(text.includes("id: cta"));
   assert.ok(text.includes("path: /tmp/shot.png"));
-  assert.ok(text.includes("multimodal"));
+  assert.ok(text.includes("attachment is not confirmed"));
 }
 
 function testNoTerminalStatus() {
@@ -39,6 +42,10 @@ function testNoTerminalStatus() {
     imageChipAttempted: false,
   });
   assert.strictEqual(r.pasted, false);
+  assert.strictEqual(r.shellAlive, false);
+  assert.strictEqual(r.grokReadiness, "unavailable");
+  assert.strictEqual(r.deliveryConfirmed, false);
+  assert.strictEqual(r.imageChipConfirmed, false);
   assert.strictEqual(r.fallback, "clipboard-only");
   assert.ok(r.statusMessage.includes("Start Grok"));
 }
@@ -46,14 +53,25 @@ function testNoTerminalStatus() {
 function testSuccessWithImageChipAttempt() {
   const r = buildPasteStatus({
     terminalAlive: true,
+    grokLaunchRequested: true,
     textPasted: true,
     imagePrepared: true,
     imageChipAttempted: true,
+    imageChipConfirmed: true,
   });
   assert.strictEqual(r.pasted, true);
-  assert.strictEqual(r.imageChip, true);
-  assert.strictEqual(r.fallback, null);
-  assert.ok(r.statusMessage.includes("image chip"));
+  assert.strictEqual(r.shellAlive, true);
+  assert.strictEqual(r.grokLaunchRequested, true);
+  assert.strictEqual(r.grokReadiness, "unknown");
+  assert.strictEqual(r.grokReady, null);
+  assert.strictEqual(r.deliveryAttempted, true);
+  assert.strictEqual(r.deliveryConfirmed, false);
+  assert.strictEqual(r.imageChipAttempted, true);
+  assert.strictEqual(r.imageChipConfirmed, false);
+  assert.strictEqual(r.imageChip, false);
+  assert.strictEqual(r.fallback, "verify-image-paste");
+  assert.ok(r.statusMessage.includes("unconfirmed"));
+  assert.ok(!/\bsent\b/i.test(r.statusMessage));
 }
 
 function testManualImageFallback() {
@@ -65,6 +83,74 @@ function testManualImageFallback() {
   });
   assert.strictEqual(r.fallback, "manual-image-paste");
   assert.ok(r.statusMessage.includes("⌘V"));
+  assert.ok(!/\bsent\b/i.test(r.statusMessage));
+}
+
+function testShellWriteNeverClaimsGrokReceipt() {
+  const r = buildDeliveryStatus({
+    terminalAlive: true,
+    grokLaunchRequested: false,
+    textPasteAttempted: true,
+    textPasted: true,
+    imagePrepared: false,
+    imageChipAttempted: false,
+  });
+  assert.strictEqual(r.pasted, true, "legacy shell-write field retained");
+  assert.strictEqual(r.grokLaunchRequested, false);
+  assert.strictEqual(r.grokReadiness, "unknown");
+  assert.strictEqual(r.deliveryAttempted, true);
+  assert.strictEqual(r.deliveryConfirmed, false);
+  assert.ok(r.statusMessage.includes("unconfirmed"));
+  assert.ok(!/\b(sent|received|confirmed)\b/i.test(r.statusMessage));
+}
+
+function testFailedWriteStillRecordsAttemptWithoutConfirmation() {
+  const r = buildPasteStatus({
+    terminalAlive: true,
+    grokLaunchRequested: true,
+    textPasteAttempted: true,
+    textPasted: false,
+    imagePrepared: true,
+    imageChipAttempted: false,
+  });
+  assert.strictEqual(r.deliveryAttempted, true);
+  assert.strictEqual(r.deliveryConfirmed, false);
+  assert.strictEqual(r.pasted, false);
+  assert.strictEqual(r.fallback, "clipboard-only");
+}
+
+function testLiveShellWithoutGrokUsesClipboardOnly() {
+  const r = buildDeliveryStatus({
+    terminalAlive: false,
+    shellAlive: true,
+    grokRunning: false,
+    grokLaunchRequested: false,
+    textPasteAttempted: false,
+    textPasted: false,
+    imagePrepared: true,
+    imageChipAttempted: false,
+  });
+  assert.strictEqual(r.shellAlive, true);
+  assert.strictEqual(r.grokRunning, false);
+  assert.strictEqual(r.grokReadiness, "not-running");
+  assert.strictEqual(r.grokReady, false);
+  assert.strictEqual(r.pasted, false);
+  assert.strictEqual(r.fallback, "clipboard-only");
+  assert.ok(r.statusMessage.includes("Shell is running"));
+  assert.ok(r.statusMessage.includes("Start Grok"));
+}
+
+function testLegacyTerminalAliveMeansReceivingGrokPty() {
+  const r = buildPasteStatus({
+    terminalAlive: true,
+    textPasted: true,
+    imagePrepared: false,
+    imageChipAttempted: false,
+  });
+  assert.strictEqual(r.shellAlive, true);
+  assert.strictEqual(r.grokRunning, true);
+  assert.strictEqual(r.grokReadiness, "unknown");
+  assert.strictEqual(r.pasted, true);
 }
 
 function testCleanupAfterCaptureCap() {
@@ -92,6 +178,10 @@ function run() {
     testNoTerminalStatus,
     testSuccessWithImageChipAttempt,
     testManualImageFallback,
+    testShellWriteNeverClaimsGrokReceipt,
+    testFailedWriteStillRecordsAttemptWithoutConfirmation,
+    testLiveShellWithoutGrokUsesClipboardOnly,
+    testLegacyTerminalAliveMeansReceivingGrokPty,
     testCleanupAfterCaptureCap,
   ];
   let failed = 0;

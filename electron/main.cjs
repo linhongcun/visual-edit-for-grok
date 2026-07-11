@@ -12,8 +12,9 @@ const {
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
+const crypto = require("crypto");
+const { pathToFileURL } = require("url");
 const { execFileSync } = require("child_process");
-const { getPickerScript } = require("./picker-script.cjs");
 const { buildClipboardPayload } = require("./clipboard-payload.cjs");
 const { TerminalSession } = require("./terminal.cjs");
 const {
@@ -29,6 +30,11 @@ const {
   shouldFlushSettings,
   focusHandoffDelays,
   planAimPickEvent,
+  validateAimEvent,
+  stampSelectionContext,
+  samePreviewIdentity,
+  planFrameCapture,
+  evaluateSelectionStability,
   resolvePickCommit,
   DEFAULT_CLEANUP_MIN_INTERVAL_MS,
   DEFAULT_SETTINGS_DEBOUNCE_MS,
@@ -99,6 +105,12 @@ function applyLoadedSettings() {
     projectCwd = s.projectCwd;
   }
   if (typeof s.splitRatio === "number") splitRatio = s.splitRatio;
+  recentPreviewUrls = Array.isArray(s.recentPreviewUrls)
+    ? s.recentPreviewUrls
+    : [];
+  recentProjectCwds = Array.isArray(s.recentProjectCwds)
+    ? s.recentProjectCwds.filter((cwd) => isDirectory(cwd))
+    : [];
   return s;
 }
 
@@ -134,16 +146,28 @@ let previewView = null;
 let termSession = null;
 
 let pickMode = false;
-let previewUrl = "http://127.0.0.1:8765";
+let previewUrl = "";
 /** @type {object | null} */
 let lastSelection = null;
 /** @type {string | null} */
 let lastScreenshotPath = null;
+/** @type {object | null} */
+let lastCaptureMeta = null;
 /** Left pane ratio 0–1 */
 let splitRatio = 0.46;
 let projectCwd = defaultProjectCwd();
 /** Auto-paste capture into terminal */
 let autoPasteTerminal = true;
+let preferredFrameMode = "viewport";
+let recentPreviewUrls = [];
+let recentProjectCwds = [];
+/** Navigation-scoped capability for the isolated preview picker preload. */
+let previewNavigationId = 0;
+let previewPickerToken = crypto.randomUUID();
+let previewLoading = false;
+let previewError = null;
+/** @type {Map<string, { resolve: (value: object | null) => void, timer: ReturnType<typeof setTimeout> }>} */
+const pendingPreviewResolutions = new Map();
 
 /** Single-flight: one capture/deliver at a time */
 let captureInFlight = false;
@@ -267,8 +291,22 @@ function createWindow() {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
     },
+  });
+
+  // The shell renderer is local application UI, not a general browser. Links
+  // from xterm are opened through one narrow, protocol-checked IPC below.
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    const shellEntry = isDev
+      ? "http://127.0.0.1:5179/"
+      : pathToFileURL(path.join(__dirname, "..", "dist", "index.html")).href;
+    try {
+      if (new URL(url).href !== new URL(shellEntry).href) event.preventDefault();
+    } catch {
+      event.preventDefault();
+    }
   });
 
   if (isDev) {
@@ -305,8 +343,10 @@ function createWindow() {
  */
 function reloadPreviewPage() {
   if (previewView && !previewView.webContents.isDestroyed()) {
+    previewLoading = true;
+    previewError = null;
     previewView.webContents.reload();
-    sendToRenderer("preview:status", { loading: true, error: null });
+    sendToRenderer("preview:status", previewStatusSnapshot());
     return true;
   }
   return false;
@@ -335,7 +375,39 @@ function bindAppShortcuts(webContents) {
 
     if (isReloadChord(input)) {
       event.preventDefault();
-      reloadPreviewPage();
+      if (input.shift && previewView && !previewView.webContents.isDestroyed()) {
+        previewLoading = true;
+        previewError = null;
+        previewView.webContents.reloadIgnoringCache();
+        sendToRenderer("preview:status", previewStatusSnapshot());
+      } else {
+        reloadPreviewPage();
+      }
+      return;
+    }
+
+    // Capture shortcuts must also work while the native preview owns focus.
+    // The shell renderer handles its own keydown events, so scope these to the
+    // BrowserView to avoid a duplicate action.
+    if (
+      webContents === previewView?.webContents &&
+      (process.platform === "darwin" ? input.meta : input.control) &&
+      input.shift &&
+      !input.alt
+    ) {
+      const key = String(input.key || "").toLowerCase();
+      if (["a", "f", "v"].includes(key)) {
+        event.preventDefault();
+        if (key === "a") {
+          if (!captureInFlight && (!pickMode ? isPreviewCapturable() : true)) {
+            void setPickMode(!pickMode);
+          }
+        } else if (key === "f") {
+          void runScreenshotAndNotify({ mode: preferredFrameMode }).catch(() => {});
+        } else {
+          void resendLastCaptureAndNotify().catch(() => {});
+        }
+      }
     }
   });
 }
@@ -386,8 +458,10 @@ function installAppMenu() {
           accelerator: "CommandOrControl+Shift+R",
           click: () => {
             if (previewView && !previewView.webContents.isDestroyed()) {
+              previewLoading = true;
+              previewError = null;
               previewView.webContents.reloadIgnoringCache();
-              sendToRenderer("preview:status", { loading: true, error: null });
+              sendToRenderer("preview:status", previewStatusSnapshot());
             }
           },
         },
@@ -418,140 +492,319 @@ function installAppMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+function previewStatusSnapshot(overrides = {}) {
+  const contents = previewView?.webContents;
+  const rawUrl = contents && !contents.isDestroyed() ? contents.getURL() : "";
+  const isWelcome = rawUrl.startsWith("file:") && rawUrl.endsWith("/welcome.html");
+  return {
+    url: isWelcome ? "" : rawUrl || previewUrl,
+    title:
+      contents && !contents.isDestroyed() ? contents.getTitle() || "" : "",
+    canGoBack: Boolean(
+      contents &&
+        !contents.isDestroyed() &&
+        contents.navigationHistory.canGoBack(),
+    ),
+    canGoForward: Boolean(
+      contents &&
+        !contents.isDestroyed() &&
+        contents.navigationHistory.canGoForward(),
+    ),
+    navigationId: previewNavigationId,
+    isWelcome,
+    selectionStale: Boolean(
+      lastSelection && !isSelectionFromCurrentNavigation(lastSelection),
+    ),
+    hasCurrentTarget: Boolean(
+      lastSelection && isSelectionFromCurrentNavigation(lastSelection),
+    ),
+    loading: previewLoading,
+    error: previewError,
+    ...overrides,
+  };
+}
+
+function rejectPendingPreviewResolutions() {
+  for (const pending of pendingPreviewResolutions.values()) {
+    clearTimeout(pending.timer);
+    pending.resolve(null);
+  }
+  pendingPreviewResolutions.clear();
+}
+
+function rotatePreviewContext() {
+  previewNavigationId += 1;
+  previewPickerToken = crypto.randomUUID();
+  rejectPendingPreviewResolutions();
+  if (pickMode) {
+    pickMode = false;
+    sendToRenderer("preview:pick-mode", { enabled: false });
+  }
+}
+
+function configurePreviewPicker() {
+  if (!previewView || previewView.webContents.isDestroyed()) return;
+  previewView.webContents.send("preview-picker:configure", {
+    token: previewPickerToken,
+    navigationId: previewNavigationId,
+  });
+}
+
+function isTrustedPickerEnvelope(event, envelope, { requirePick = false } = {}) {
+  return Boolean(
+    previewView &&
+      event.sender === previewView.webContents &&
+      (!event.senderFrame || event.senderFrame === previewView.webContents.mainFrame) &&
+      envelope &&
+      envelope.token === previewPickerToken &&
+      envelope.navigationId === previewNavigationId &&
+      (!requirePick || pickMode),
+  );
+}
+
+function attachSelectionContext(selection, sourceId = previewView?.webContents.id) {
+  if (!selection || typeof selection !== "object") return null;
+  const prior = selection.captureContext || {};
+  const priorViewport = prior.viewport || {};
+  const priorScroll = prior.scroll || {};
+  return stampSelectionContext(selection, {
+    navigationId: previewNavigationId,
+    navigationToken: previewPickerToken,
+    sourceId,
+    pageUrl: selection.pageUrl || previewView?.webContents.getURL() || "",
+    viewport: {
+      ...priorViewport,
+      scrollX: priorViewport.scrollX ?? priorScroll.x ?? 0,
+      scrollY: priorViewport.scrollY ?? priorScroll.y ?? 0,
+    },
+  });
+}
+
+async function handleTrustedAimSelection(rawSelection) {
+  const plan = planAimPickEvent({
+    inFlight: captureInFlight,
+    pickMode,
+    trusted: true,
+  });
+  if (!plan.proceed) {
+    await setPickMode(false);
+    await clearPickerOverlay();
+    sendToRenderer("capture:result", {
+      kind: "error",
+      message: plan.statusMessage || "Capture in progress — wait a moment.",
+    });
+    return;
+  }
+
+  const prevSelection = lastSelection;
+  const prevScreenshotPath = lastScreenshotPath;
+  let uncommittedShotPath = null;
+  setCaptureBusy(true);
+  try {
+    const selection = attachSelectionContext(rawSelection);
+    if (!selection?.boundingBox) throw new Error("Invalid preview selection");
+    if (!isPreviewCapturable()) {
+      throw new Error("Preview changed during Aim — wait for it to finish loading and Aim again.");
+    }
+    const captureIdentity = snapshotPreviewIdentity();
+    await setPickMode(false);
+    if (!previewIdentityMatches(captureIdentity)) {
+      throw new Error("Preview changed during Aim — wait for it to finish loading and Aim again.");
+    }
+    const shot = await takeScreenshotFile({
+      bounds: selection.boundingBox,
+      reason: "pick",
+      padding: 72,
+    });
+    uncommittedShotPath = shot.path;
+    if (!shot.cropped) {
+      throw new Error("Could not capture the selected target — Aim again after the page settles.");
+    }
+    if (!previewIdentityMatches(captureIdentity)) {
+      throw new Error("Preview changed during Aim — capture discarded. Aim again after loading finishes.");
+    }
+    const resolvedAfterCapture = await resolveSelectionInPreview(selection);
+    const stableTarget = resolvedAfterCapture
+      ? attachSelectionContext(resolvedAfterCapture)
+      : null;
+    const stability = evaluateSelectionStability({
+      before: selection,
+      after: stableTarget,
+    });
+    if (!previewIdentityMatches(captureIdentity) || !stability.stable) {
+      throw new Error("Target changed during Aim — capture discarded. Aim again when the page is stable.");
+    }
+    const result = await deliverCapture(
+      selection,
+      shot.path,
+      "selection",
+      { pasteToTerminal: true, writeClipboard: true },
+    );
+    const commit = resolvePickCommit({
+      ok: true,
+      selection,
+      screenshotPath: shot.path,
+      prevSelection,
+      prevScreenshotPath,
+    });
+    lastSelection = commit.lastSelection;
+    lastScreenshotPath = commit.lastScreenshotPath;
+    uncommittedShotPath = null;
+    lastCaptureMeta = buildCaptureMeta({
+      kind: "selection",
+      selection: lastSelection,
+      screenshotPath: lastScreenshotPath,
+      shot,
+      result,
+      captureMode: "target-context",
+    });
+    await clearPickerOverlay();
+    sendToRenderer("capture:result", {
+      kind: "selection",
+      selection: lastSelection,
+      ...result,
+      screenshotPath: lastScreenshotPath,
+      captureMeta: lastCaptureMeta,
+    });
+    sendToRenderer("preview:status", previewStatusSnapshot());
+    if (result.pastedToTerminal) scheduleTerminalFocus({ reason: "pick" });
+  } catch (err) {
+    if (uncommittedShotPath) {
+      try {
+        fs.unlinkSync(uncommittedShotPath);
+      } catch {
+        // Capture cleanup will remove any file another process still holds.
+      }
+    }
+    const commit = resolvePickCommit({
+      ok: false,
+      selection: null,
+      screenshotPath: null,
+      prevSelection,
+      prevScreenshotPath,
+    });
+    lastSelection = commit.lastSelection;
+    lastScreenshotPath = commit.lastScreenshotPath;
+    await setPickMode(false);
+    await clearPickerOverlay();
+    sendToRenderer("capture:result", {
+      kind: "error",
+      message: err instanceof Error ? err.message : String(err),
+    });
+  } finally {
+    setCaptureBusy(false);
+  }
+}
+
 function createPreviewView() {
   if (!mainWindow) return;
 
   previewView = new BrowserView({
     webPreferences: {
+      preload: path.join(__dirname, "preview-preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
       webSecurity: true,
+      partition: "persist:vefg-preview",
     },
   });
 
   mainWindow.setBrowserView(previewView);
-  // Preview: Cmd+R reloads site; Esc cancels Aim when focused in page
   bindAppShortcuts(previewView.webContents);
 
-  previewView.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
-    return { action: "deny" };
+  // Aim and Frame require no website permissions. Keep embedded content from
+  // requesting clipboard, media, notifications, fullscreen, or other grants.
+  previewView.webContents.session.setPermissionRequestHandler(
+    (_contents, _permission, callback) => callback(false),
+  );
+  previewView.webContents.session.setPermissionCheckHandler(() => false);
+
+  previewView.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+
+  previewView.webContents.on("will-navigate", (event, url) => {
+    try {
+      const parsed = new URL(url);
+      const welcomeUrl = pathToFileURL(path.join(__dirname, "welcome.html")).href;
+      if (
+        !["http:", "https:"].includes(parsed.protocol) &&
+        parsed.href !== welcomeUrl
+      ) {
+        event.preventDefault();
+      }
+    } catch {
+      event.preventDefault();
+    }
   });
 
-  previewView.webContents.on("did-finish-load", async () => {
-    await injectPicker();
-    sendToRenderer("preview:status", {
-      url: previewView?.webContents.getURL() ?? previewUrl,
-      title: previewView?.webContents.getTitle() ?? "",
-      loading: false,
-      error: null,
-    });
+  previewView.webContents.on(
+    "did-start-navigation",
+    (_event, _url, _isInPlace, isMainFrame) => {
+      if (!isMainFrame) return;
+      previewLoading = true;
+      previewError = null;
+      rotatePreviewContext();
+      sendToRenderer("preview:status", previewStatusSnapshot({ loading: true, error: null }));
+    },
+  );
+
+  previewView.webContents.on("did-navigate-in-page", (_event, url, isMainFrame) => {
+    if (!isMainFrame) return;
+    rotatePreviewContext();
+    previewLoading = false;
+    previewError = null;
+    configurePreviewPicker();
+    if (/^https?:/i.test(url)) {
+      previewUrl = url;
+      persist({ previewUrl });
+    }
+    sendToRenderer("preview:status", previewStatusSnapshot());
+  });
+
+  previewView.webContents.on("did-navigate", (_event, url) => {
+    if (/^https?:/i.test(url)) {
+      previewUrl = url;
+      persist({ previewUrl });
+    } else if (url.endsWith("/welcome.html")) {
+      previewUrl = "";
+      persist({ previewUrl: "" });
+    }
+    sendToRenderer("preview:status", previewStatusSnapshot());
+  });
+
+  previewView.webContents.on("did-finish-load", () => {
+    previewLoading = false;
+    previewError = null;
+    configurePreviewPicker();
+    sendToRenderer("preview:status", previewStatusSnapshot());
   });
 
   previewView.webContents.on("did-start-loading", () => {
-    sendToRenderer("preview:status", { loading: true });
+    previewLoading = true;
+    sendToRenderer("preview:status", previewStatusSnapshot());
   });
 
   previewView.webContents.on(
     "did-fail-load",
-    (_e, code, desc, url, isMainFrame) => {
-      if (!isMainFrame) return;
-      sendToRenderer("preview:status", {
-        loading: false,
-        error: `${desc} (${code})`,
-        url,
-      });
+    (_event, code, desc, url, isMainFrame) => {
+      if (!isMainFrame || code === -3) return;
+      previewLoading = false;
+      previewError = `${desc} (${code})`;
+      sendToRenderer(
+        "preview:status",
+        previewStatusSnapshot({
+          url,
+        }),
+      );
     },
   );
 
-  previewView.webContents.on("console-message", (_e, _level, message) => {
-    if (typeof message !== "string") return;
-
-    if (message.startsWith("__VEFG_SELECT__")) {
-      void (async () => {
-        // Pure policy: busy reject still cancels Aim + clears sticky overlay
-        const plan = planAimPickEvent({ inFlight: captureInFlight });
-        if (!plan.proceed) {
-          if (plan.cancelPickMode) await setPickMode(false);
-          if (plan.clearOverlay) await clearPickerOverlay();
-          sendToRenderer("capture:result", {
-            kind: "error",
-            message:
-              plan.statusMessage || "Capture in progress — wait a moment.",
-          });
-          return;
-        }
-
-        // Snapshot previous pair; only commit after full success
-        const prevSelection = lastSelection;
-        const prevScreenshotPath = lastScreenshotPath;
-        setCaptureBusy(true);
-        try {
-          const payload = JSON.parse(message.slice("__VEFG_SELECT__".length));
-          if (plan.cancelPickMode) await setPickMode(false);
-
-          // Always capture a screenshot on pick so Grok gets visual context
-          const shot = await takeScreenshotFile({
-            bounds: payload.boundingBox,
-            reason: "pick",
-          });
-          // Pick → screenshot + multimodal paste (image chip) + text into Grok
-          const result = await deliverCapture(payload, shot.path, "selection", {
-            pasteToTerminal: true,
-            writeClipboard: true,
-          });
-
-          const commit = resolvePickCommit({
-            ok: true,
-            selection: payload,
-            screenshotPath: shot.path,
-            prevSelection,
-            prevScreenshotPath,
-          });
-          lastSelection = commit.lastSelection;
-          lastScreenshotPath = commit.lastScreenshotPath;
-          if (commit.clearOverlay) await clearPickerOverlay();
-          if (commit.cancelPickMode) await setPickMode(false);
-
-          sendToRenderer("capture:result", {
-            kind: "selection",
-            selection: commit.lastSelection,
-            ...result,
-            screenshotPath: commit.lastScreenshotPath,
-          });
-          if (result.pastedToTerminal) {
-            scheduleTerminalFocus({ reason: "pick" });
-          }
-        } catch (err) {
-          const commit = resolvePickCommit({
-            ok: false,
-            selection: null,
-            screenshotPath: null,
-            prevSelection,
-            prevScreenshotPath,
-          });
-          lastSelection = commit.lastSelection;
-          lastScreenshotPath = commit.lastScreenshotPath;
-          if (commit.cancelPickMode) await setPickMode(false);
-          if (commit.clearOverlay) await clearPickerOverlay();
-          sendToRenderer("capture:result", {
-            kind: "error",
-            message: err instanceof Error ? err.message : String(err),
-          });
-        } finally {
-          setCaptureBusy(false);
-        }
-      })();
-      return;
-    }
-
-    if (message === "__VEFG_CANCEL_PICK__") {
-      setPickMode(false);
-    }
+  previewView.webContents.on("page-title-updated", () => {
+    sendToRenderer("preview:status", previewStatusSnapshot());
   });
 
-  loadPreview(previewUrl);
+  if (previewUrl) loadPreview(previewUrl);
+  else loadWelcomePreview();
 }
 
 function getLayoutBounds() {
@@ -616,46 +869,98 @@ function layoutViews() {
   });
 }
 
-async function injectPicker() {
-  if (!previewView) return;
+async function setPickMode(enabled) {
+  const requested = Boolean(enabled);
+  if (requested && !isPreviewCapturable()) {
+    pickMode = false;
+    sendToRenderer("preview:pick-mode", { enabled: false });
+    return false;
+  }
+  pickMode = requested;
+  sendToRenderer("preview:pick-mode", { enabled: pickMode });
+  if (!previewView || previewView.webContents.isDestroyed()) return;
+  previewView.webContents.send("preview-picker:set-mode", {
+    enabled: pickMode,
+    token: previewPickerToken,
+    navigationId: previewNavigationId,
+  });
+}
+
+function isPreviewCapturable() {
+  if (
+    !previewView ||
+    previewView.webContents.isDestroyed() ||
+    previewLoading ||
+    previewError
+  ) {
+    return false;
+  }
   try {
-    await previewView.webContents.executeJavaScript(getPickerScript(), true);
-    if (pickMode) {
-      await previewView.webContents.executeJavaScript(
-        "window.__vefgSetPickMode && window.__vefgSetPickMode(true)",
-        true,
-      );
-    }
-  } catch (err) {
-    console.warn("Picker inject failed:", err);
+    return ["http:", "https:"].includes(
+      new URL(previewView.webContents.getURL()).protocol,
+    );
+  } catch {
+    return false;
   }
 }
 
-async function setPickMode(enabled) {
-  pickMode = Boolean(enabled);
-  sendToRenderer("preview:pick-mode", { enabled: pickMode });
-  if (!previewView) return;
-  try {
-    await previewView.webContents.executeJavaScript(
-      `window.__vefgSetPickMode && window.__vefgSetPickMode(${pickMode ? "true" : "false"})`,
-      true,
-    );
-  } catch {
-    /* page may not be ready */
+function snapshotPreviewIdentity() {
+  if (!previewView || previewView.webContents.isDestroyed()) return null;
+  return {
+    webContentsId: previewView.webContents.id,
+    navigationId: previewNavigationId,
+    navigationToken: previewPickerToken,
+    url: previewView.webContents.getURL(),
+  };
+}
+
+function previewIdentityMatches(snapshot) {
+  if (!snapshot || !previewView || previewView.webContents.isDestroyed()) {
+    return false;
   }
+  return samePreviewIdentity(snapshot, {
+    webContentsId: previewView.webContents.id,
+    navigationId: previewNavigationId,
+    navigationToken: previewPickerToken,
+    url: previewView.webContents.getURL(),
+    loading: previewLoading,
+  });
 }
 
 function loadPreview(url) {
-  previewUrl = url;
-  persist({ previewUrl: url });
   if (!previewView) return;
   try {
     const parsed = new URL(url);
     if (!["http:", "https:"].includes(parsed.protocol)) {
       throw new Error("Only http(s) URLs are supported");
     }
-    previewView.webContents.loadURL(url);
-    sendToRenderer("preview:status", { url, loading: true, error: null });
+    previewUrl = parsed.href;
+    recentPreviewUrls = [previewUrl, ...recentPreviewUrls.filter((item) => item !== previewUrl)].slice(0, 8);
+    persist({ previewUrl, recentPreviewUrls });
+    previewLoading = true;
+    previewError = null;
+    const requestedUrl = previewUrl;
+    void previewView.webContents.loadURL(requestedUrl).catch((err) => {
+      // loadURL rejects as well as emitting did-fail-load. Handle the promise
+      // so stopped localhost servers cannot become unhandled rejections.
+      if (
+        !previewView ||
+        previewView.webContents.isDestroyed() ||
+        previewUrl !== requestedUrl
+      ) {
+        return;
+      }
+      previewLoading = false;
+      previewError = previewError || (err instanceof Error ? err.message : String(err));
+      sendToRenderer(
+        "preview:status",
+        previewStatusSnapshot({ url: requestedUrl, loading: false }),
+      );
+    });
+    sendToRenderer(
+      "preview:status",
+      previewStatusSnapshot({ url: previewUrl, loading: true, error: null }),
+    );
   } catch (err) {
     sendToRenderer("preview:status", {
       url,
@@ -665,16 +970,75 @@ function loadPreview(url) {
   }
 }
 
+function loadWelcomePreview() {
+  if (!previewView || previewView.webContents.isDestroyed()) return;
+  const welcomeUrl = pathToFileURL(path.join(__dirname, "welcome.html")).href;
+  previewLoading = true;
+  previewError = null;
+  void previewView.webContents.loadURL(welcomeUrl).catch((err) => {
+    if (
+      !previewView ||
+      previewView.webContents.isDestroyed() ||
+      previewUrl
+    ) {
+      return;
+    }
+    previewLoading = false;
+    previewError = err instanceof Error ? err.message : String(err);
+    sendToRenderer(
+      "preview:status",
+      previewStatusSnapshot({ url: "", loading: false, error: previewError }),
+    );
+  });
+  sendToRenderer(
+    "preview:status",
+    previewStatusSnapshot({
+      url: "",
+      title: "Welcome",
+      isWelcome: true,
+      loading: true,
+      error: null,
+    }),
+  );
+}
+
 async function clearPickerOverlay() {
   if (!previewView || previewView.webContents.isDestroyed()) return;
-  try {
-    await previewView.webContents.executeJavaScript(
-      `window.__vefgClearSelection && window.__vefgClearSelection()`,
-      true,
-    );
-  } catch {
-    /* page may not have picker */
+  previewView.webContents.send("preview-picker:clear");
+}
+
+function isSelectionFromCurrentNavigation(selection) {
+  const context = selection?.captureContext;
+  return Boolean(
+    context &&
+      context.navigationId === previewNavigationId &&
+      context.navigationToken === previewPickerToken,
+  );
+}
+
+async function resolveSelectionInPreview(selection) {
+  if (
+    !previewView ||
+    previewView.webContents.isDestroyed() ||
+    !selection?.selector ||
+    !isSelectionFromCurrentNavigation(selection)
+  ) {
+    return null;
   }
+  const requestId = crypto.randomUUID();
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      pendingPreviewResolutions.delete(requestId);
+      resolve(null);
+    }, 900);
+    pendingPreviewResolutions.set(requestId, { resolve, timer });
+    previewView.webContents.send("preview-picker:resolve", {
+      requestId,
+      token: previewPickerToken,
+      navigationId: previewNavigationId,
+      selector: selection.selector,
+    });
+  });
 }
 
 /**
@@ -738,6 +1102,7 @@ function putScreenshotOnClipboardForGrok(filePath) {
  */
 async function pasteToGrokMultimodal(text, screenshotPath) {
   const terminalAlive = Boolean(termSession?.isAlive());
+  const grokRunning = Boolean(termSession?.isGrokAlive());
   const hasShot = Boolean(screenshotPath && fs.existsSync(screenshotPath));
 
   // Always refresh clipboard for manual fallback
@@ -756,15 +1121,25 @@ async function pasteToGrokMultimodal(text, screenshotPath) {
     }
   };
 
-  if (!terminalAlive) {
+  if (!grokRunning) {
     writeClipboardBundle();
     const status = buildPasteStatus({
-      terminalAlive: false,
+      terminalAlive,
+      shellAlive: terminalAlive,
+      grokRunning: false,
+      grokLaunchRequested: false,
+      textPasteAttempted: false,
       textPasted: false,
       imagePrepared: hasShot,
       imageChipAttempted: false,
     });
-    return { ...status, textPasted: false, terminalAlive: false };
+    return {
+      ...status,
+      textPasted: false,
+      terminalAlive,
+      terminalState: terminalAlive ? "shell" : "off",
+      grokRunning: false,
+    };
   }
 
   focusMainTerminal();
@@ -777,8 +1152,7 @@ async function pasteToGrokMultimodal(text, screenshotPath) {
     if (imagePrepared) {
       await delay(60);
       try {
-        termSession.write("\x16");
-        imageChipAttempted = true;
+        imageChipAttempted = Boolean(termSession.write("\x16"));
         await delay(280);
       } catch (err) {
         console.warn("Ctrl+V inject failed:", err);
@@ -796,15 +1170,28 @@ async function pasteToGrokMultimodal(text, screenshotPath) {
     textPasted = false;
   }
 
-  writeClipboardBundle();
+  // Keep a real file/image on the clipboard after the automatic attempt so
+  // the operator-facing “press ⌘V if needed” fallback remains truthful.
+  if (hasShot) putScreenshotOnClipboardForGrok(screenshotPath);
+  else writeClipboardBundle();
 
   const status = buildPasteStatus({
     terminalAlive: true,
+    shellAlive: true,
+    grokRunning: true,
+    grokLaunchRequested: true,
+    textPasteAttempted: true,
     textPasted,
     imagePrepared,
     imageChipAttempted,
   });
-  return { ...status, textPasted, terminalAlive: true };
+  return {
+    ...status,
+    textPasted,
+    terminalAlive: true,
+    terminalState: "grok",
+    grokRunning: true,
+  };
 }
 
 /**
@@ -853,9 +1240,11 @@ async function deliverCapture(
   let fallback = null;
   let statusMessage = "";
   let terminalAlive = Boolean(termSession?.isAlive());
+  let deliveryDetails = {};
 
   if (wantPaste) {
     const result = await pasteToGrokMultimodal(text, screenshotPath);
+    deliveryDetails = result;
     pastedToTerminal = result.pasted;
     imageChip = result.imageChip;
     imagePrepared = result.imagePrepared;
@@ -880,12 +1269,15 @@ async function deliverCapture(
   scheduleCaptureCleanup();
 
   return {
+    ...deliveryDetails,
     copied: writeClipboard || pastedToTerminal || Boolean(fallback),
     pastedToTerminal,
     hasImage,
     imagePrepared,
     imageChip,
-    multimodal: imageChip,
+    // No private Grok acknowledgement is available; “attempted” is exposed
+    // separately by deliveryDetails and must not be promoted to confirmed.
+    multimodal: false,
     fallback,
     statusMessage,
     terminalAlive,
@@ -903,6 +1295,7 @@ async function deliverCapture(
  * @param {{
  *   bounds?: { x?: number, y?: number, top?: number, left?: number, width?: number, height?: number } | null,
  *   reason?: string,
+ *   padding?: number,
  * }} [opts]
  * @returns {Promise<{ path: string, fullPath: string, cropped: boolean }>}
  */
@@ -924,7 +1317,7 @@ async function takeScreenshotFile(opts = {}) {
   if (bounds && Number(bounds.width) > 0 && Number(bounds.height) > 0) {
     try {
       const size = full.getSize();
-      const pad = 32;
+      const pad = Math.max(0, Math.min(240, Number(opts.padding) || 96));
       const left = Math.round(bounds.left ?? bounds.x ?? 0);
       const top = Math.round(bounds.top ?? bounds.y ?? 0);
       const bw = Math.round(bounds.width);
@@ -966,33 +1359,162 @@ async function takeScreenshotFile(opts = {}) {
   return { path: filePath, fullPath: filePath, cropped };
 }
 
-async function captureScreenshot() {
-  const prevSelection = lastSelection;
-  const prevScreenshotPath = lastScreenshotPath;
+function buildCaptureMeta({
+  kind,
+  selection,
+  screenshotPath,
+  shot,
+  result,
+  captureMode,
+  fallbackReason = null,
+}) {
+  return {
+    kind,
+    capturedAt: Date.now(),
+    pageUrl:
+      selection?.pageUrl ||
+      previewStatusSnapshot().url ||
+      null,
+    pageTitle:
+      selection?.pageTitle ||
+      previewStatusSnapshot().title ||
+      null,
+    target: selection
+      ? `<${selection.tag || "unknown"}>${selection.id ? `#${selection.id}` : ""}${selection.classes?.[0] ? `.${selection.classes[0]}` : ""}`
+      : null,
+    targetDetails: selection
+      ? {
+          tag: selection.tag || "unknown",
+          id: selection.id || null,
+          className: selection.className || "",
+          domPath: selection.domPath || selection.selector || null,
+        }
+      : null,
+    screenshotPath: screenshotPath || null,
+    captureMode,
+    cropped: Boolean(shot?.cropped),
+    fallbackReason,
+    delivery: {
+      terminalState: result?.terminalState || null,
+      textPasted: Boolean(result?.textPasted),
+      deliveryAttempted: Boolean(result?.deliveryAttempted),
+      deliveryConfirmed: Boolean(result?.deliveryConfirmed),
+      imageAttachment: result?.imageAttachment ||
+        (result?.imageChip ? "attempted" : result?.imagePrepared ? "prepared" : "none"),
+      imageChipAttempted: Boolean(result?.imageChipAttempted),
+      imageChipConfirmed: Boolean(result?.imageChipConfirmed),
+      fallback: result?.fallback || null,
+      statusMessage: result?.statusMessage || "",
+    },
+  };
+}
+
+async function captureScreenshot(options = {}) {
+  if (!isPreviewCapturable()) {
+    throw new Error("Preview is not ready — open a loaded http(s) page first.");
+  }
+  const requestedMode = ["viewport", "target-context"].includes(options?.mode)
+    ? options.mode
+    : preferredFrameMode;
+  preferredFrameMode = requestedMode;
   const locked = await withCaptureLock(async () => {
+    if (!isPreviewCapturable()) {
+      throw new Error("Preview is not ready — wait for loading to finish.");
+    }
+    const captureIdentity = snapshotPreviewIdentity();
+    let selectionForFrame = null;
+    let fallbackReason = null;
+    if (requestedMode === "target-context" && lastSelection) {
+      if (isSelectionFromCurrentNavigation(lastSelection)) {
+        const refreshed = await resolveSelectionInPreview(lastSelection);
+        if (refreshed) {
+          const stamped = attachSelectionContext(refreshed);
+          const current = stamped?.captureContext || {};
+          const framePlan = planFrameCapture({
+            selection: stamped,
+            currentUrl: current.pageUrl,
+            currentNavigationToken: previewPickerToken,
+            currentNavigationId: previewNavigationId,
+            currentSourceId: previewView?.webContents.id,
+            currentViewport: current.viewport,
+          });
+          selectionForFrame = framePlan.selectionForPayload;
+          fallbackReason = framePlan.reason;
+        } else fallbackReason = "target-not-found";
+      } else {
+        fallbackReason = "target-from-prior-navigation";
+      }
+    }
+    if (!previewIdentityMatches(captureIdentity)) {
+      throw new Error("Preview changed during Frame — wait for it to finish loading and try again.");
+    }
     const shot = await takeScreenshotFile({
-      bounds: lastSelection?.boundingBox,
+      bounds: selectionForFrame?.boundingBox || null,
       reason: "manual",
+      padding: 112,
     });
-    const result = await deliverCapture(lastSelection, shot.path, "screenshot", {
-      pasteToTerminal: true,
-      writeClipboard: true,
-    });
-    // Frame: commit only after deliver completed without throw
-    const commit = resolvePickCommit({
-      ok: true,
+    const discardUnstableShot = (message) => {
+      try {
+        fs.unlinkSync(shot.path);
+      } catch {
+        // Capture cleanup will remove any file another process still holds.
+      }
+      throw new Error(message);
+    };
+    if (!previewIdentityMatches(captureIdentity)) {
+      discardUnstableShot(
+        "Preview changed during Frame — capture discarded. Wait for loading to finish and try again.",
+      );
+    }
+    if (selectionForFrame && !shot.cropped) {
+      selectionForFrame = null;
+      fallbackReason = "target-crop-failed";
+    }
+    if (selectionForFrame) {
+      const resolvedAfterCapture = await resolveSelectionInPreview(selectionForFrame);
+      const stableTarget = resolvedAfterCapture
+        ? attachSelectionContext(resolvedAfterCapture)
+        : null;
+      const stability = evaluateSelectionStability({
+        before: selectionForFrame,
+        after: stableTarget,
+      });
+      if (!previewIdentityMatches(captureIdentity) || !stability.stable) {
+        discardUnstableShot(
+          "Target changed during Frame — capture discarded. Try again when the page is stable.",
+        );
+      }
+    }
+    const result = await deliverCapture(
+      selectionForFrame,
+      shot.path,
+      "screenshot",
+      { pasteToTerminal: true, writeClipboard: true },
+    );
+    // A new Frame is a new coherent pair. If a target cannot be refreshed in
+    // the current navigation, commit a screenshot-only capture instead of
+    // pairing current pixels with stale DOM.
+    lastSelection = selectionForFrame;
+    lastScreenshotPath = shot.path;
+    lastCaptureMeta = buildCaptureMeta({
+      kind: "screenshot",
       selection: lastSelection,
-      screenshotPath: shot.path,
-      prevSelection,
-      prevScreenshotPath,
+      screenshotPath: lastScreenshotPath,
+      shot,
+      result,
+      captureMode:
+        selectionForFrame && shot.cropped ? "target-context" : "viewport",
+      fallbackReason,
     });
-    lastSelection = commit.lastSelection;
-    lastScreenshotPath = commit.lastScreenshotPath;
     return {
       path: shot.path,
       fullPath: shot.fullPath,
       cropped: shot.cropped,
       screenshotPath: lastScreenshotPath,
+      selection: lastSelection,
+      captureMode: lastCaptureMeta.captureMode,
+      fallbackReason,
+      captureMeta: lastCaptureMeta,
       ...result,
     };
   });
@@ -1006,16 +1528,141 @@ async function captureScreenshot() {
   return locked;
 }
 
+async function runScreenshotAndNotify(options = {}) {
+  try {
+    const result = await captureScreenshot(options);
+    sendToRenderer("preview:status", previewStatusSnapshot());
+    sendToRenderer("capture:result", {
+      kind: "screenshot",
+      selection: lastSelection,
+      ...result,
+    });
+    return result;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    sendToRenderer("capture:result", { kind: "error", message });
+    throw err;
+  }
+}
+
+async function resendLastCaptureAndNotify() {
+  if (!lastSelection && !lastScreenshotPath) {
+    const message = "Nothing to re-send — Aim or Frame first";
+    sendToRenderer("capture:result", { kind: "error", message });
+    return { ok: false, message };
+  }
+  const locked = await withCaptureLock(async () =>
+    deliverCapture(lastSelection, lastScreenshotPath, "deliver", {
+      pasteToTerminal: true,
+      writeClipboard: true,
+    }),
+  );
+  if (locked?.busy) {
+    const message = locked.statusMessage || "Capture in progress";
+    sendToRenderer("capture:result", { kind: "error", message });
+    return { ok: false, message };
+  }
+  lastCaptureMeta = {
+    ...(lastCaptureMeta || {}),
+    resentAt: Date.now(),
+    delivery: {
+      terminalState: locked?.terminalState || null,
+      textPasted: Boolean(locked?.textPasted),
+      deliveryAttempted: Boolean(locked?.deliveryAttempted),
+      deliveryConfirmed: Boolean(locked?.deliveryConfirmed),
+      imageAttachment: locked?.imageAttachment || "none",
+      imageChipAttempted: Boolean(locked?.imageChipAttempted),
+      imageChipConfirmed: Boolean(locked?.imageChipConfirmed),
+      fallback: locked?.fallback || null,
+      statusMessage: locked?.statusMessage || "",
+    },
+  };
+  sendToRenderer("capture:result", {
+    kind: "deliver",
+    selection: lastSelection,
+    ...locked,
+    captureMeta: lastCaptureMeta,
+  });
+  if (locked?.pastedToTerminal) scheduleTerminalFocus({ reason: "deliver" });
+  return locked;
+}
+
 function ensureTerminal() {
   if (termSession) return termSession;
   termSession = new TerminalSession({
     cwd: projectCwd,
     onData: (data) => sendToRenderer("terminal:data", data),
-    onExit: (code) => {
-      sendToRenderer("terminal:exit", { code });
+    onExit: (code, _signal, mode) => {
+      sendToRenderer("terminal:exit", { code, mode });
+      sendToRenderer("terminal:status", {
+        alive: false,
+        shellAlive: false,
+        terminalMode: null,
+        grokRunning: false,
+        grokLaunchRequested: false,
+        grokReady: false,
+      });
     },
   });
   return termSession;
+}
+
+function isDirectory(cwd) {
+  try {
+    return Boolean(cwd && fs.statSync(cwd).isDirectory());
+  } catch {
+    return false;
+  }
+}
+
+async function switchProjectCwd(cwd) {
+  if (typeof cwd !== "string" || !isDirectory(cwd)) {
+    throw new Error("Invalid directory");
+  }
+  if (cwd === projectCwd) {
+    return { projectCwd, terminalRestarted: false, canceled: false };
+  }
+  if (termSession?.isGrokAlive()) {
+    const confirmation = await dialog.showMessageBox(mainWindow, {
+      type: "warning",
+      title: "Switch project folder?",
+      message: "Switching folders will stop the active Grok session.",
+      detail: `Current: ${projectCwd}\nNew: ${cwd}`,
+      buttons: ["Switch & stop Grok", "Cancel"],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+    });
+    if (confirmation.response !== 0) {
+      return { projectCwd, terminalRestarted: false, canceled: true };
+    }
+  }
+  projectCwd = cwd;
+  recentProjectCwds = [
+    projectCwd,
+    ...recentProjectCwds.filter((item) => item !== projectCwd),
+  ].slice(0, 8);
+  persist({ projectCwd, recentProjectCwds });
+
+  let terminalRestarted = false;
+  if (termSession?.isAlive()) {
+    const { cols, rows } = termSession;
+    termSession.start({ cwd: projectCwd, cols, rows });
+    terminalRestarted = true;
+    sendToRenderer("terminal:status", {
+      alive: true,
+      shellAlive: true,
+      terminalMode: "shell",
+      grokRunning: false,
+      grokLaunchRequested: false,
+      grokReady: false,
+      cwd: projectCwd,
+      reason: "project-changed",
+    });
+  } else {
+    termSession?.setCwd(projectCwd);
+  }
+  return { projectCwd, terminalRestarted, canceled: false };
 }
 
 function sendToRenderer(channel, payload) {
@@ -1042,17 +1689,90 @@ function focusMainTerminal(reason = "pick-or-deliver") {
 }
 
 function registerIpc() {
+  ipcMain.on("preview-picker:select", (event, envelope) => {
+    if (
+      !previewView ||
+      event.sender !== previewView.webContents ||
+      (event.senderFrame && event.senderFrame !== previewView.webContents.mainFrame)
+    ) {
+      return;
+    }
+    const validation = validateAimEvent({
+      pickMode,
+      inFlight: captureInFlight,
+      eventNavigationToken: envelope?.token,
+      currentNavigationToken: previewPickerToken,
+      eventNavigationId: envelope?.navigationId,
+      currentNavigationId: previewNavigationId,
+      eventSourceId: event.sender.id,
+      currentSourceId: previewView.webContents.id,
+    });
+    if (!validation.proceed) {
+      if (validation.cancelPickMode) void setPickMode(false);
+      if (validation.clearOverlay) void clearPickerOverlay();
+      return;
+    }
+    const selection = envelope?.selection;
+    const box = selection?.boundingBox;
+    if (
+      !selection ||
+      typeof selection !== "object" ||
+      !box ||
+      ![box.x, box.y, box.width, box.height].every((value) =>
+        Number.isFinite(Number(value)),
+      )
+    ) {
+      void setPickMode(false);
+      sendToRenderer("capture:result", {
+        kind: "error",
+        message: "Preview returned an invalid selection.",
+      });
+      return;
+    }
+    void handleTrustedAimSelection(
+      attachSelectionContext(selection, event.sender.id),
+    );
+  });
+
+  ipcMain.on("preview-picker:cancel", (event, envelope) => {
+    if (!isTrustedPickerEnvelope(event, envelope, { requirePick: true })) return;
+    void setPickMode(false);
+  });
+
+  ipcMain.on("preview-picker:resolved", (event, envelope) => {
+    if (!isTrustedPickerEnvelope(event, envelope)) return;
+    const requestId = envelope?.requestId;
+    if (typeof requestId !== "string") return;
+    const pending = pendingPreviewResolutions.get(requestId);
+    if (!pending) return;
+    pendingPreviewResolutions.delete(requestId);
+    clearTimeout(pending.timer);
+    pending.resolve(envelope.selection || null);
+  });
+
   ipcMain.handle("app:get-state", () => ({
     previewUrl,
+    previewStatus: previewStatusSnapshot(),
     pickMode,
     lastSelection,
     lastScreenshotPath,
+    lastCaptureMeta,
     captureDir: CAPTURE_DIR,
     projectCwd,
+    recentPreviewUrls,
+    recentProjectCwds,
     splitRatio,
     autoPasteTerminal,
+    frameMode: preferredFrameMode,
     captureBusy: captureInFlight,
     terminalAlive: Boolean(termSession?.isAlive()),
+    shellAlive: Boolean(termSession?.isAlive()),
+    terminalMode: termSession?.getMode() || null,
+    grokRunning: Boolean(termSession?.isGrokAlive()),
+    grokLaunchRequested: Boolean(termSession?.isGrokAlive()),
+    grokReady: termSession?.isGrokAlive() ? null : false,
+    grokReadiness: termSession?.isGrokAlive() ? "unknown" : "not-running",
+    grokState: termSession?.isGrokAlive() ? "running" : "idle",
     layout: getLayoutBounds(),
   }));
 
@@ -1074,21 +1794,13 @@ function registerIpc() {
       defaultPath: projectCwd,
     });
     if (!result.canceled && result.filePaths[0]) {
-      projectCwd = result.filePaths[0];
-      termSession?.setCwd(projectCwd);
-      persist({ projectCwd });
+      return switchProjectCwd(result.filePaths[0]);
     }
-    return { projectCwd };
+    return { projectCwd, terminalRestarted: false, canceled: true };
   });
 
   ipcMain.handle("project:set-cwd", async (_e, cwd) => {
-    if (typeof cwd !== "string" || !fs.existsSync(cwd)) {
-      throw new Error("Invalid directory");
-    }
-    projectCwd = cwd;
-    termSession?.setCwd(projectCwd);
-    persist({ projectCwd });
-    return { projectCwd };
+    return switchProjectCwd(cwd);
   });
 
   ipcMain.handle("preview:navigate", async (_e, url) => {
@@ -1097,18 +1809,20 @@ function registerIpc() {
   });
 
   ipcMain.handle("preview:reload", async () => {
-    previewView?.webContents.reload();
+    reloadPreviewPage();
     return { ok: true };
   });
 
   ipcMain.handle("preview:go-back", async () => {
-    if (previewView?.webContents.canGoBack()) previewView.webContents.goBack();
+    if (previewView?.webContents.navigationHistory.canGoBack()) {
+      previewView.webContents.navigationHistory.goBack();
+    }
     return { ok: true };
   });
 
   ipcMain.handle("preview:go-forward", async () => {
-    if (previewView?.webContents.canGoForward()) {
-      previewView.webContents.goForward();
+    if (previewView?.webContents.navigationHistory.canGoForward()) {
+      previewView.webContents.navigationHistory.goForward();
     }
     return { ok: true };
   });
@@ -1116,9 +1830,11 @@ function registerIpc() {
   ipcMain.handle("preview:set-pick-mode", async (_e, enabled) => {
     const on = Boolean(enabled);
     let warning = null;
-    if (on && !termSession?.isAlive()) {
+    if (on && !isPreviewCapturable()) {
+      warning = "Preview is not ready — open a loaded http(s) page first.";
+    } else if (on && !termSession?.isGrokAlive()) {
       warning =
-        "Terminal not running. You can still Aim (clipboard), but Start Grok first for auto-send.";
+        "Grok is not running. You can still Aim (clipboard), but Start Grok first for auto-send.";
     }
     await setPickMode(on);
     return {
@@ -1128,21 +1844,9 @@ function registerIpc() {
     };
   });
 
-  ipcMain.handle("capture:screenshot", async () => {
-    try {
-      const result = await captureScreenshot();
-      sendToRenderer("capture:result", {
-        kind: "screenshot",
-        selection: lastSelection,
-        ...result,
-      });
-      return result;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      sendToRenderer("capture:result", { kind: "error", message });
-      throw err;
-    }
-  });
+  ipcMain.handle("capture:screenshot", async (_event, options = {}) =>
+    runScreenshotAndNotify(options),
+  );
 
   ipcMain.handle("capture:recopy", async (_e, enrichment = {}) => {
     if (!lastSelection && !lastScreenshotPath) {
@@ -1175,51 +1879,73 @@ function registerIpc() {
   });
 
   /** Re-send last capture into Grok (multimodal image + text). */
-  ipcMain.handle("capture:deliver", async (_e, enrichment = {}) => {
-    if (!lastSelection && !lastScreenshotPath) {
-      throw new Error("Nothing to re-send — Aim or Frame first");
-    }
-    const locked = await withCaptureLock(async () =>
-      deliverCapture(lastSelection, lastScreenshotPath, "deliver", {
-        intent: enrichment?.intent ?? null,
-        styleDiffs: enrichment?.styleDiffs ?? null,
-        pasteToTerminal: true,
-        writeClipboard: true,
-      }),
-    );
-    if (locked && locked.busy) {
-      sendToRenderer("capture:result", {
-        kind: "error",
-        message: locked.statusMessage,
-      });
-      throw new Error(locked.statusMessage);
-    }
-    sendToRenderer("capture:result", {
-      kind: "deliver",
-      selection: lastSelection,
-      ...locked,
-    });
-    if (locked?.pastedToTerminal) {
-      scheduleTerminalFocus({ reason: "deliver" });
-    }
-    return locked;
-  });
+  ipcMain.handle("capture:deliver", async () => resendLastCaptureAndNotify());
 
   ipcMain.handle("capture:open-folder", async () => {
     ensureCaptureDir();
-    shell.openPath(CAPTURE_DIR);
+    const error = await shell.openPath(CAPTURE_DIR);
+    if (error) throw new Error(`Could not open Frames folder: ${error}`);
     return { ok: true, path: CAPTURE_DIR };
+  });
+
+  ipcMain.handle("shell:open-external", async (event, rawUrl) => {
+    if (!mainWindow || event.sender !== mainWindow.webContents) {
+      throw new Error("Untrusted link source");
+    }
+    let parsed;
+    try {
+      parsed = new URL(String(rawUrl || ""));
+    } catch {
+      throw new Error("Invalid link");
+    }
+    if (!["http:", "https:"].includes(parsed.protocol)) {
+      throw new Error("Only http(s) links can be opened");
+    }
+    await shell.openExternal(parsed.href);
+    return { ok: true };
+  });
+
+  ipcMain.handle("capture:thumbnail", async (_event, requestedPath) => {
+    if (
+      typeof requestedPath !== "string" ||
+      requestedPath !== lastScreenshotPath ||
+      !requestedPath.startsWith(`${CAPTURE_DIR}${path.sep}`) ||
+      !fs.existsSync(requestedPath)
+    ) {
+      return { dataUrl: null };
+    }
+    const image = nativeImage.createFromPath(requestedPath);
+    if (image.isEmpty()) return { dataUrl: null };
+    const size = image.getSize();
+    const scale = Math.min(1, 520 / size.width, 300 / size.height);
+    const thumbnail =
+      scale < 1
+        ? image.resize({
+            width: Math.max(1, Math.round(size.width * scale)),
+            height: Math.max(1, Math.round(size.height * scale)),
+            quality: "good",
+          })
+        : image;
+    return { dataUrl: thumbnail.toDataURL() };
   });
 
   ipcMain.handle("capture:clear", async () => {
     lastSelection = null;
     lastScreenshotPath = null;
+    lastCaptureMeta = null;
+    sendToRenderer("preview:status", previewStatusSnapshot());
     return { ok: true };
   });
 
   ipcMain.handle("capture:set-auto-paste", async (_e, enabled) => {
     autoPasteTerminal = Boolean(enabled);
     return { autoPasteTerminal };
+  });
+
+  ipcMain.handle("capture:set-frame-mode", async (_event, mode) => {
+    preferredFrameMode =
+      mode === "target-context" ? "target-context" : "viewport";
+    return { frameMode: preferredFrameMode };
   });
 
   // —— Terminal ——
@@ -1231,6 +1957,11 @@ function registerIpc() {
       session.start({ cwd: projectCwd, cols, rows });
       sendToRenderer("terminal:status", {
         alive: true,
+        shellAlive: true,
+        terminalMode: "shell",
+        grokRunning: false,
+        grokLaunchRequested: false,
+        grokReady: false,
         cwd: projectCwd,
       });
       return { ok: true, cwd: projectCwd };
@@ -1264,14 +1995,62 @@ function registerIpc() {
   });
 
   ipcMain.handle("terminal:launch-grok", async () => {
-    if (!termSession?.isAlive()) {
-      const session = ensureTerminal();
-      session.start({ cwd: projectCwd, cols: 80, rows: 24 });
+    const session = ensureTerminal();
+    if (session.isGrokAlive()) {
+      return {
+        ok: true,
+        alreadyRunning: true,
+        cwd: projectCwd,
+        terminalMode: "grok",
+        grokRunning: true,
+        grokReady: null,
+        grokReadiness: "unknown",
+        grokState: "running",
+      };
     }
-    // Small delay so shell is ready
-    await new Promise((r) => setTimeout(r, 120));
-    termSession.launchGrok();
-    return { ok: true };
+    try {
+      sendToRenderer(
+        "terminal:data",
+        `\r\n\x1b[90m[Starting Grok directly in ${projectCwd}]\x1b[0m\r\n`,
+      );
+      const result = session.launchGrok({
+        cwd: projectCwd,
+        cols: session.cols,
+        rows: session.rows,
+      });
+      sendToRenderer("terminal:status", {
+        alive: true,
+        shellAlive: true,
+        terminalMode: "grok",
+        grokRunning: true,
+        grokLaunchRequested: true,
+        // Process liveness is known; whether the TUI prompt has accepted the
+        // image cannot be observed without parsing Grok's private UI state.
+        grokReady: null,
+        grokReadiness: "unknown",
+        grokState: "running",
+        cwd: projectCwd,
+      });
+      return {
+        ok: true,
+        cwd: projectCwd,
+        grokReady: null,
+        grokReadiness: "unknown",
+        grokState: "running",
+        ...result,
+      };
+    } catch (err) {
+      sendToRenderer("terminal:status", {
+        alive: false,
+        shellAlive: false,
+        terminalMode: null,
+        grokRunning: false,
+        grokLaunchRequested: false,
+        grokReady: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
   });
 
   ipcMain.handle("terminal:restart", async (_e, opts = {}) => {
@@ -1281,7 +2060,15 @@ function registerIpc() {
       cols: opts.cols || session.cols,
       rows: opts.rows || session.rows,
     });
-    sendToRenderer("terminal:status", { alive: true, cwd: projectCwd });
+    sendToRenderer("terminal:status", {
+      alive: true,
+      shellAlive: true,
+      terminalMode: "shell",
+      grokRunning: false,
+      grokLaunchRequested: false,
+      grokReady: false,
+      cwd: projectCwd,
+    });
     return { ok: true, cwd: projectCwd };
   });
 }

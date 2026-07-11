@@ -63,7 +63,7 @@ export default function TerminalPane({ active, focusNonce = 0 }: Props) {
       cursorBlink: true,
       fontSize: 13,
       fontFamily:
-        '"SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas, monospace',
+        '"SFMono-Regular", Menlo, Monaco, Consolas, ui-monospace, monospace',
       theme: {
         background: "#0a0c10",
         foreground: "#e8eaef",
@@ -93,7 +93,13 @@ export default function TerminalPane({ active, focusNonce = 0 }: Props) {
 
     const fit = new FitAddon();
     term.loadAddon(fit);
-    term.loadAddon(new WebLinksAddon());
+    term.loadAddon(
+      new WebLinksAddon((_event, uri) => {
+        void window.vefg.openExternal(uri).catch(() => {
+          // Main validates schemes and owns the native browser handoff.
+        });
+      }),
+    );
     term.open(hostRef.current);
     fit.fit();
 
@@ -183,5 +189,12 @@ export default function TerminalPane({ active, focusNonce = 0 }: Props) {
     return () => clearFocusTimer();
   }, [focusNonce]);
 
-  return <div className="terminal-host" ref={hostRef} tabIndex={0} />;
+  return (
+    <div
+      className="terminal-host"
+      ref={hostRef}
+      tabIndex={0}
+      aria-label="Interactive Grok terminal"
+    />
+  );
 }

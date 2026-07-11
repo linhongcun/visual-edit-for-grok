@@ -5,6 +5,193 @@
  * @typedef {{ before?: string, after?: string }} StyleChange
  * @typedef {Record<string, StyleChange | string>} StyleDiffMap
  *
+ */
+
+const REDACTED_VALUE = "[REDACTED]";
+const SENSITIVE_ATTRIBUTE_NAME =
+  /(value|token|secret|auth|password|passwd|credential|api[-_]?key|access[-_]?key|private[-_]?key|session|cookie|bearer)/i;
+const SENSITIVE_ATTRIBUTE_VALUE =
+  /(?:^|[^a-z0-9])(access[_-]?token|refresh[_-]?token|token|secret|auth(?:orization)?|password|passwd|credential|api[_-]?key|session(?:id)?|cookie)\s*["']?\s*[=:]/i;
+
+/** Compact, high-signal computed styles included in the Grok context. */
+const KEY_COMPUTED_STYLE_PROPS = [
+  "display",
+  "position",
+  "width",
+  "height",
+  "margin",
+  "padding",
+  "color",
+  "backgroundColor",
+  "fontSize",
+  "fontWeight",
+  "lineHeight",
+  "border",
+  "borderRadius",
+  "flex",
+  "gap",
+  "justifyContent",
+  "alignItems",
+  "gridTemplateColumns",
+];
+
+function stripTerminalControls(value) {
+  return String(value ?? "").replace(
+    /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g,
+    "",
+  );
+}
+
+function compactScalar(value, maxLength = 240) {
+  return stripTerminalControls(value)
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/```/g, "`\u200b``")
+    .trim()
+    .slice(0, maxLength);
+}
+
+function isSensitiveAttribute(name, value) {
+  return (
+    SENSITIVE_ATTRIBUTE_NAME.test(String(name)) ||
+    SENSITIVE_ATTRIBUTE_VALUE.test(String(value ?? ""))
+  );
+}
+
+/**
+ * Redact secrets while keeping attribute names useful for source matching.
+ * @param {object | null | undefined} attributes
+ * @param {number} [limit]
+ * @returns {{ name: string, value: string, redacted: boolean }[]}
+ */
+function sanitizeAttributes(attributes, limit = 16) {
+  if (!attributes || typeof attributes !== "object") return [];
+  const rows = [];
+  for (const [rawName, rawValue] of Object.entries(attributes)) {
+    if (rows.length >= limit) break;
+    const name = compactScalar(rawName, 80);
+    if (!name || name.startsWith("__vefg")) continue;
+    const redacted = isSensitiveAttribute(name, rawValue);
+    rows.push({
+      name,
+      value: redacted ? REDACTED_VALUE : compactScalar(rawValue, 200),
+      redacted,
+    });
+  }
+  return rows;
+}
+
+/**
+ * Select only the computed styles that materially help locate visual changes.
+ * @param {object | null | undefined} computedStyle
+ * @returns {{ property: string, value: string }[]}
+ */
+function compactComputedStyles(computedStyle) {
+  if (!computedStyle || typeof computedStyle !== "object") return [];
+  const rows = [];
+  for (const property of KEY_COMPUTED_STYLE_PROPS) {
+    const rawValue = computedStyle[property];
+    if (rawValue == null || rawValue === "") continue;
+    const value = compactScalar(rawValue, 160);
+    if (value) rows.push({ property, value });
+  }
+  return rows;
+}
+
+function finiteNumber(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function sanitizePageUrl(value) {
+  if (typeof value !== "string" || !value.trim()) return "";
+  try {
+    const url = new URL(value);
+    if (url.username) url.username = REDACTED_VALUE;
+    if (url.password) url.password = REDACTED_VALUE;
+    for (const [name, paramValue] of url.searchParams) {
+      if (isSensitiveAttribute(name, `${name}=${paramValue}`)) {
+        url.searchParams.set(name, REDACTED_VALUE);
+      }
+    }
+    if (SENSITIVE_ATTRIBUTE_VALUE.test(url.hash)) {
+      url.hash = "#redacted";
+    }
+    return compactScalar(url.href, 500);
+  } catch {
+    return SENSITIVE_ATTRIBUTE_VALUE.test(value)
+      ? REDACTED_VALUE
+      : compactScalar(value, 500);
+  }
+}
+
+function selectionViewport(selection) {
+  const context = selection?.captureContext || selection?.context || {};
+  const viewport = context.viewport || selection?.viewport || {};
+  const scroll =
+    context.scroll || viewport.scroll || selection?.scroll || {};
+  const width = finiteNumber(
+    viewport.width ?? viewport.innerWidth ?? selection?.viewportWidth,
+  );
+  const height = finiteNumber(
+    viewport.height ?? viewport.innerHeight ?? selection?.viewportHeight,
+  );
+  const scrollX = finiteNumber(
+    viewport.scrollX ??
+      viewport.pageXOffset ??
+      scroll.x ??
+      scroll.scrollX ??
+      selection?.scrollX,
+  );
+  const scrollY = finiteNumber(
+    viewport.scrollY ??
+      viewport.pageYOffset ??
+      scroll.y ??
+      scroll.scrollY ??
+      selection?.scrollY,
+  );
+  const devicePixelRatio = finiteNumber(
+    viewport.devicePixelRatio ??
+      viewport.deviceScaleFactor ??
+      viewport.dpr ??
+      selection?.devicePixelRatio,
+  );
+  return { width, height, scrollX, scrollY, devicePixelRatio };
+}
+
+/**
+ * Canonical representation of every page-controlled, non-geometric field
+ * emitted in browser_element. Navigation, viewport and bounds are checked by
+ * runtime-policy separately with numeric tolerances.
+ *
+ * @param {object | null | undefined} selection
+ * @returns {string}
+ */
+function selectionContentFingerprint(selection) {
+  if (!selection || typeof selection !== "object") return "";
+  const className =
+    selection.className ||
+    (Array.isArray(selection.classes) ? selection.classes.join(" ") : "");
+  return JSON.stringify({
+    tag: compactScalar(selection.tag || "unknown", 80),
+    domPath: compactScalar(
+      selection.domPath || selection.selector || selection.tag || "(unknown)",
+      800,
+    ),
+    id: compactScalar(selection.id || "", 200),
+    className: compactScalar(className, 500),
+    text: compactScalar(selection.text ?? "", 500),
+    attributes: sanitizeAttributes(selection.attributes),
+    pageTitle: compactScalar(selection.pageTitle || "", 300),
+    selector: compactScalar(selection.selector || "", 800),
+    computedStyles: compactComputedStyles(selection.computedStyle),
+  });
+}
+
+/**
+ * Pure paste payload builder for native Grok Build TUI.
+ * Shape aligned with Cursor's browser_element + additive intent / style diffs.
+ *
  * @param {{
  *   selection?: object | null,
  *   screenshotPath?: string | null,
@@ -24,25 +211,25 @@ function buildClipboardPayload(opts = {}) {
       "The user selected this node in the browser preview. A screenshot was captured at pick time (see browser_screenshot below / clipboard image).",
     );
     lines.push("");
-    lines.push(`tag: ${selection.tag || "unknown"}`);
+    lines.push(`tag: ${compactScalar(selection.tag || "unknown", 80)}`);
 
     const path =
       selection.domPath || selection.selector || selection.tag || "(unknown)";
-    lines.push(`dom_path: ${path}`);
+    lines.push(`dom_path: ${compactScalar(path, 800)}`);
 
     if (selection.id) {
-      lines.push(`id: ${selection.id}`);
+      lines.push(`id: ${compactScalar(selection.id, 200)}`);
     }
 
     const className =
       selection.className ||
       (Array.isArray(selection.classes) ? selection.classes.join(" ") : "");
     if (className) {
-      lines.push(`class: ${className}`);
+      lines.push(`class: ${compactScalar(className, 500)}`);
     }
 
     if (selection.text != null && selection.text !== "") {
-      lines.push(`visible_text: ${selection.text}`);
+      lines.push(`visible_text: ${compactScalar(selection.text, 500)}`);
     }
 
     const box = selection.boundingBox || {};
@@ -54,27 +241,51 @@ function buildClipboardPayload(opts = {}) {
       `bounds_css_px: top=${top} left=${left} width=${width} height=${height}`,
     );
 
-    const attrs = selection.attributes || {};
-    const attrKeys = Object.keys(attrs);
-    if (attrKeys.length) {
+    const attributes = sanitizeAttributes(selection.attributes);
+    if (attributes.length) {
       lines.push("attributes:");
-      for (const k of attrKeys.slice(0, 16)) {
-        lines.push(`  ${k}=${attrs[k]}`);
+      for (const attribute of attributes) {
+        lines.push(`  ${attribute.name}=${attribute.value}`);
       }
     } else if (selection.id || className) {
       lines.push("attributes:");
-      if (className) lines.push(`  class=${className}`);
-      if (selection.id) lines.push(`  id=${selection.id}`);
+      if (className) lines.push(`  class=${compactScalar(className, 500)}`);
+      if (selection.id) lines.push(`  id=${compactScalar(selection.id, 200)}`);
     }
 
-    if (selection.pageUrl) {
-      lines.push(`page_url: ${selection.pageUrl}`);
+    const pageUrl =
+      selection.captureContext?.pageUrl ||
+      selection.context?.pageUrl ||
+      selection.pageUrl;
+    if (pageUrl) {
+      lines.push(`page_url: ${sanitizePageUrl(pageUrl)}`);
     }
     if (selection.pageTitle) {
-      lines.push(`page_title: ${selection.pageTitle}`);
+      lines.push(`page_title: ${compactScalar(selection.pageTitle, 300)}`);
     }
     if (selection.selector && selection.selector !== path) {
-      lines.push(`css_selector: ${selection.selector}`);
+      lines.push(`css_selector: ${compactScalar(selection.selector, 800)}`);
+    }
+
+    const viewport = selectionViewport(selection);
+    if (viewport.width != null && viewport.height != null) {
+      lines.push(
+        `viewport_css_px: width=${viewport.width} height=${viewport.height}`,
+      );
+    }
+    if (viewport.scrollX != null && viewport.scrollY != null) {
+      lines.push(`scroll_css_px: x=${viewport.scrollX} y=${viewport.scrollY}`);
+    }
+    if (viewport.devicePixelRatio != null) {
+      lines.push(`device_pixel_ratio: ${viewport.devicePixelRatio}`);
+    }
+
+    const computedStyles = compactComputedStyles(selection.computedStyle);
+    if (computedStyles.length) {
+      lines.push("computed_styles:");
+      for (const style of computedStyles) {
+        lines.push(`  ${style.property}: ${style.value}`);
+      }
     }
 
     lines.push("```");
@@ -113,13 +324,16 @@ function buildClipboardPayload(opts = {}) {
     lines.push("```browser_screenshot");
     lines.push(`path: ${screenshotPath}`);
     lines.push(
-      "A screenshot was attached as a multimodal image chip (pasted into this prompt). Use the image pixels, not only this path.",
+      "An image paste was attempted for this screenshot; attachment is not confirmed. If an image chip is visible, use its pixels. Otherwise use the local path or paste the clipboard image manually.",
     );
     lines.push("```");
     lines.push("");
   }
 
-  return lines.join("\n");
+  // Final defense in depth: intent/style payloads are not all routed through
+  // compactScalar, so strip terminal control bytes from the complete bracketed
+  // paste. In particular, ESC must never terminate bracketed-paste mode.
+  return stripTerminalControls(lines.join("\n"));
 }
 
 /**
@@ -201,7 +415,14 @@ function prefillStyleDiffsFromSelection(selection) {
 
 module.exports = {
   buildClipboardPayload,
+  sanitizeAttributes,
+  selectionContentFingerprint,
+  compactComputedStyles,
+  selectionViewport,
+  stripTerminalControls,
   normalizeStyleDiffs,
   prefillStyleDiffsFromSelection,
   EDITABLE_STYLE_PROPS,
+  KEY_COMPUTED_STYLE_PROPS,
+  REDACTED_VALUE,
 };

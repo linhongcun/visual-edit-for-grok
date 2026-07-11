@@ -1,9 +1,12 @@
 /// <reference types="vite/client" />
 
 import type {
+  CaptureReceiptState,
   CaptureResult,
   ElementSelection,
   EnrichmentPayload,
+  FrameMode,
+  GrokRuntimeState,
   LayoutBounds,
   PreviewStatus,
 } from "./types";
@@ -16,16 +19,29 @@ export interface VefgApi {
     lastScreenshotPath: string | null;
     captureDir: string;
     projectCwd: string;
+    recentPreviewUrls?: string[];
+    recentProjectCwds?: string[];
     splitRatio: number;
     autoPasteTerminal: boolean;
+    frameMode?: FrameMode;
     captureBusy?: boolean;
     terminalAlive: boolean;
+    shellAlive?: boolean;
+    grokLaunchRequested?: boolean;
+    grokReady?: boolean | null;
+    grokReadiness?: "ready" | "unknown" | "unavailable" | string;
+    grokState?: GrokRuntimeState | string;
+    grokRunning?: boolean;
+    terminalMode?: "shell" | "grok" | null;
+    previewStatus?: PreviewStatus;
+    lastCapture?: CaptureReceiptState | null;
+    lastCaptureMeta?: CaptureReceiptState | null;
     layout: LayoutBounds;
   }>;
-  navigate: (url: string) => Promise<{ ok: boolean }>;
-  reload: () => Promise<{ ok: boolean }>;
-  goBack: () => Promise<{ ok: boolean }>;
-  goForward: () => Promise<{ ok: boolean }>;
+  navigate: (url: string) => Promise<{ ok: boolean; status?: PreviewStatus }>;
+  reload: () => Promise<{ ok: boolean; status?: PreviewStatus }>;
+  goBack: () => Promise<{ ok: boolean; status?: PreviewStatus }>;
+  goForward: () => Promise<{ ok: boolean; status?: PreviewStatus }>;
   setPickMode: (
     enabled: boolean,
   ) => Promise<{
@@ -33,11 +49,13 @@ export interface VefgApi {
     warning?: string | null;
     terminalAlive?: boolean;
   }>;
-  screenshot: () => Promise<{
+  screenshot: (opts?: { mode?: FrameMode }) => Promise<{
     path: string;
     copied: boolean;
     pastedToTerminal?: boolean;
     hasImage: boolean;
+    cropped?: boolean;
+    captureMode?: FrameMode;
   }>;
   recopy: (enrichment?: EnrichmentPayload) => Promise<{
     copied: boolean;
@@ -52,10 +70,21 @@ export interface VefgApi {
     text?: string;
   }>;
   openCaptureFolder: () => Promise<{ ok: boolean; path: string }>;
+  captureThumbnail: (capturePath: string) => Promise<{ dataUrl: string | null }>;
   clearCapture: () => Promise<{ ok: boolean }>;
   setAutoPaste: (enabled: boolean) => Promise<{ autoPasteTerminal: boolean }>;
-  pickProjectDir: () => Promise<{ projectCwd: string }>;
-  setProjectDir: (cwd: string) => Promise<{ projectCwd: string }>;
+  setFrameMode: (mode: FrameMode) => Promise<{ frameMode: FrameMode }>;
+  openExternal: (url: string) => Promise<{ ok: boolean }>;
+  pickProjectDir: () => Promise<{
+    projectCwd: string;
+    terminalRestarted?: boolean;
+    canceled?: boolean;
+  }>;
+  setProjectDir: (cwd: string) => Promise<{
+    projectCwd: string;
+    terminalRestarted?: boolean;
+    canceled?: boolean;
+  }>;
   setSplit: (
     ratio: number,
     opts?: { force?: boolean; persist?: boolean },
@@ -70,7 +99,17 @@ export interface VefgApi {
     cols: number;
     rows: number;
   }) => Promise<{ ok: boolean }>;
-  terminalLaunchGrok: () => Promise<{ ok: boolean }>;
+  terminalLaunchGrok: () => Promise<{
+    ok: boolean;
+    terminalAlive?: boolean;
+    shellAlive?: boolean;
+    grokLaunchRequested?: boolean;
+    grokReady?: boolean | null;
+    grokReadiness?: "ready" | "unknown" | "unavailable" | string;
+    grokState?: GrokRuntimeState | string;
+    mode?: "shell" | "grok";
+    alreadyRunning?: boolean;
+  }>;
   terminalRestart: (opts?: {
     cols?: number;
     rows?: number;

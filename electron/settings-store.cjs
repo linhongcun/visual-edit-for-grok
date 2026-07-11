@@ -5,15 +5,26 @@
 const fs = require("fs");
 const path = require("path");
 
+const SETTINGS_VERSION = 1;
+const LEGACY_DEMO_URLS = new Set([
+  "http://127.0.0.1:8765",
+  "http://127.0.0.1:8765/",
+]);
+
 const DEFAULTS = {
-  previewUrl: "http://127.0.0.1:8765",
+  settingsVersion: SETTINGS_VERSION,
+  // Empty means the bundled first-run guide; the old localhost:8765 default
+  // produced a failure screen in installed builds unless the demo was started.
+  previewUrl: "",
   projectCwd: "",
   splitRatio: 0.46,
+  recentPreviewUrls: [],
+  recentProjectCwds: [],
 };
 
 /**
  * @param {unknown} raw
- * @returns {{ previewUrl: string, projectCwd: string, splitRatio: number }}
+ * @returns {{ settingsVersion: number, previewUrl: string, projectCwd: string, splitRatio: number, recentPreviewUrls: string[], recentProjectCwds: string[] }}
  */
 function normalizeSettings(raw) {
   const out = { ...DEFAULTS };
@@ -22,7 +33,9 @@ function normalizeSettings(raw) {
   const o = /** @type {Record<string, unknown>} */ (raw);
   if (typeof o.previewUrl === "string" && o.previewUrl.trim()) {
     const u = o.previewUrl.trim();
-    if (/^https?:\/\//i.test(u)) out.previewUrl = u;
+    const isLegacyDefault =
+      o.settingsVersion == null && LEGACY_DEMO_URLS.has(u);
+    if (/^https?:\/\//i.test(u) && !isLegacyDefault) out.previewUrl = u;
   }
   if (typeof o.projectCwd === "string") {
     out.projectCwd = o.projectCwd;
@@ -30,12 +43,30 @@ function normalizeSettings(raw) {
   if (typeof o.splitRatio === "number" && Number.isFinite(o.splitRatio)) {
     out.splitRatio = Math.min(0.75, Math.max(0.22, o.splitRatio));
   }
+  if (Array.isArray(o.recentPreviewUrls)) {
+    out.recentPreviewUrls = Array.from(
+      new Set(
+        o.recentPreviewUrls
+          .filter((value) => typeof value === "string" && /^https?:\/\//i.test(value))
+          .map((value) => value.trim()),
+      ),
+    ).slice(0, 8);
+  }
+  if (Array.isArray(o.recentProjectCwds)) {
+    out.recentProjectCwds = Array.from(
+      new Set(
+        o.recentProjectCwds
+          .filter((value) => typeof value === "string" && value.trim())
+          .map((value) => value.trim()),
+      ),
+    ).slice(0, 8);
+  }
   return out;
 }
 
 /**
  * @param {string} filePath
- * @returns {{ previewUrl: string, projectCwd: string, splitRatio: number }}
+ * @returns {{ settingsVersion: number, previewUrl: string, projectCwd: string, splitRatio: number, recentPreviewUrls: string[], recentProjectCwds: string[] }}
  */
 function loadSettings(filePath) {
   try {
@@ -49,8 +80,8 @@ function loadSettings(filePath) {
 
 /**
  * @param {string} filePath
- * @param {Partial<{ previewUrl: string, projectCwd: string, splitRatio: number }>} partial
- * @returns {{ previewUrl: string, projectCwd: string, splitRatio: number }}
+ * @param {Partial<{ settingsVersion: number, previewUrl: string, projectCwd: string, splitRatio: number, recentPreviewUrls: string[], recentProjectCwds: string[] }>} partial
+ * @returns {{ settingsVersion: number, previewUrl: string, projectCwd: string, splitRatio: number, recentPreviewUrls: string[], recentProjectCwds: string[] }}
  */
 function saveSettings(filePath, partial = {}) {
   const prev = loadSettings(filePath);
@@ -70,6 +101,7 @@ function defaultSettingsPath(userDataDir) {
 }
 
 module.exports = {
+  SETTINGS_VERSION,
   DEFAULTS,
   normalizeSettings,
   loadSettings,

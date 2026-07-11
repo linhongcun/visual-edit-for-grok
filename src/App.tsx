@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import TerminalPane from "./components/TerminalPane";
@@ -21,8 +22,26 @@ import {
 import type {
   CaptureResult,
   ElementSelection,
+  FrameMode,
+  GrokRuntimeState,
   PreviewStatus,
+  TerminalStatus,
 } from "./types";
+
+const DEFAULT_PREVIEW_URL = "";
+const MIN_TERMINAL_WIDTH = 320;
+const MIN_PREVIEW_WIDTH = 360;
+const SPLITTER_WIDTH = 5;
+
+interface CaptureReceipt {
+  target: string;
+  pageUrl: string;
+  pageTitle: string;
+  capturedAt: number;
+  screenshotPath: string | null;
+  mode: FrameMode;
+  delivery: string;
+}
 
 function isElectron(): boolean {
   return typeof window !== "undefined" && Boolean(window.vefg);
@@ -33,10 +52,55 @@ function shortPath(p: string, max = 42) {
   return "…" + p.slice(-(max - 1));
 }
 
+function selectionLabelFor(selection: ElementSelection | null): string | null {
+  if (!selection) return null;
+  return `<${selection.tag}>${selection.id ? `#${selection.id}` : ""}${
+    selection.classes?.[0] ? `.${selection.classes[0]}` : ""
+  }`;
+}
+
+function deliverySummary(result: CaptureResult): string {
+  if (
+    result.imageChipAttempted ||
+    (result.pastedToTerminal && result.imageChip)
+  ) {
+    return "Image + DOM paste attempted; confirm the image chip in Grok.";
+  }
+  if (result.deliveryAttempted || result.pastedToTerminal) {
+    return "DOM/context paste attempted; confirm it in the Grok prompt.";
+  }
+  if (result.copied) {
+    return "Copied to clipboard; it was not confirmed in Grok.";
+  }
+  return "Capture saved locally; delivery was not confirmed.";
+}
+
+function formatReceiptTime(timestamp: number): string {
+  if (!Number.isFinite(timestamp)) return "Unknown";
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(new Date(timestamp));
+}
+
+function isDefaultPreview(url?: string): boolean {
+  if (!url) return true;
+  try {
+    const parsed = new URL(url);
+    return (
+      (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost") &&
+      parsed.port === "8765"
+    );
+  } catch {
+    return false;
+  }
+}
+
 export default function App() {
-  const [urlInput, setUrlInput] = useState("http://127.0.0.1:8765");
+  const [urlInput, setUrlInput] = useState(DEFAULT_PREVIEW_URL);
   const [preview, setPreview] = useState<PreviewStatus>({
-    url: "http://127.0.0.1:8765",
+    url: DEFAULT_PREVIEW_URL,
     loading: false,
   });
   const [pickMode, setPickMode] = useState(false);
@@ -46,10 +110,76 @@ export default function App() {
   /** Unified busy: Frame / Re-send / Aim-pick in flight (main single-flight) */
   const [captureBusy, setCaptureBusy] = useState(false);
   const [projectCwd, setProjectCwd] = useState("");
+  const [recentPreviewUrls, setRecentPreviewUrls] = useState<string[]>([]);
+  const [recentProjectCwds, setRecentProjectCwds] = useState<string[]>([]);
   const [terminalWidth, setTerminalWidth] = useState(640);
   const [terminalAlive, setTerminalAlive] = useState(false);
+  const [grokState, setGrokState] = useState<GrokRuntimeState>("idle");
+  const [frameMode, setFrameMode] = useState<FrameMode>("viewport");
+  const [receipt, setReceipt] = useState<CaptureReceipt | null>(null);
+  const [receiptThumbnail, setReceiptThumbnail] = useState<string | null>(null);
   const [termFocusNonce, setTermFocusNonce] = useState(0);
   const dragging = useRef(false);
+  const selectionRef = useRef<ElementSelection | null>(null);
+  const screenshotPathRef = useRef<string | null>(null);
+  const previewRef = useRef(preview);
+  const frameModeRef = useRef(frameMode);
+  const pickModeRef = useRef(pickMode);
+  const lastLaunchAtRef = useRef(0);
+  const togglePickRef = useRef(async () => {});
+  const onScreenshotRef = useRef(async () => {});
+  const onResendRef = useRef(async () => {});
+
+  useEffect(() => {
+    selectionRef.current = selection;
+  }, [selection]);
+
+  useEffect(() => {
+    screenshotPathRef.current = screenshotPath;
+  }, [screenshotPath]);
+
+  useEffect(() => {
+    previewRef.current = preview;
+  }, [preview]);
+
+  useEffect(() => {
+    frameModeRef.current = frameMode;
+    if (isElectron()) {
+      void window.vefg.setFrameMode(frameMode).catch(() => {
+        // Native window may be closing; local selection remains usable.
+      });
+    }
+  }, [frameMode]);
+
+  useEffect(() => {
+    if (preview.selectionStale && frameMode === "target-context") {
+      setFrameMode("viewport");
+    }
+  }, [frameMode, preview.selectionStale]);
+
+  useEffect(() => {
+    pickModeRef.current = pickMode;
+  }, [pickMode]);
+
+  useEffect(() => {
+    const capturePath = receipt?.screenshotPath;
+    if (!capturePath || !isElectron()) {
+      setReceiptThumbnail(null);
+      return;
+    }
+    let canceled = false;
+    void window.vefg
+      .captureThumbnail(capturePath)
+      .then(({ dataUrl }) => {
+        if (!canceled) setReceiptThumbnail(dataUrl);
+      })
+      .catch(() => {
+        if (!canceled) setReceiptThumbnail(null);
+      });
+    return () => {
+      canceled = true;
+    };
+  }, [receipt?.screenshotPath]);
 
   function focusGrokTerminal() {
     setTermFocusNonce((n) => n + 1);
@@ -60,24 +190,150 @@ export default function App() {
     window.setTimeout(() => setToast((cur) => (cur === msg ? null : cur)), 5200);
   }
 
+  function applyTerminalRuntime(status: TerminalStatus) {
+    const shellAlive =
+      status.shellAlive ?? status.terminalAlive ?? status.alive;
+    if (typeof shellAlive === "boolean") setTerminalAlive(shellAlive);
+
+    setGrokState((current) => {
+      const raw = String(status.grokState || "").toLowerCase();
+      if (
+        status.grokReady === true ||
+        status.grokReadiness === "ready" ||
+        raw === "ready"
+      ) {
+        return "ready";
+      }
+      if (raw === "launching") return "launching";
+      if (
+        status.grokLaunchRequested === true ||
+        raw === "launch-requested" ||
+        raw === "requested" ||
+        raw === "running"
+      ) {
+        return "launch-requested";
+      }
+      if (raw === "exited" || raw === "stopped") return "exited";
+      if (raw === "idle" || raw === "not-started") return "idle";
+      if (shellAlive === false) {
+        return current === "idle" ? "idle" : "exited";
+      }
+      return current;
+    });
+  }
+
+  function makeReceipt(
+    result: CaptureResult,
+    selected: ElementSelection | null,
+    path: string | null,
+  ): CaptureReceipt {
+    const meta = result.captureMeta || null;
+    const mode =
+      result.captureMode ||
+      meta?.captureMode ||
+      (result.kind === "selection"
+        ? "target-context"
+        : typeof result.cropped === "boolean"
+          ? result.cropped
+            ? "target-context"
+            : "viewport"
+          : frameModeRef.current);
+    const isViewportFrame = result.kind === "screenshot" && mode === "viewport";
+    return {
+      target: isViewportFrame
+        ? "Full viewport"
+        : meta?.target || selectionLabelFor(selected) || "Preview viewport",
+      pageUrl:
+        result.pageUrl ||
+        meta?.pageUrl ||
+        selected?.pageUrl ||
+        previewRef.current.url ||
+        "",
+      pageTitle:
+        result.pageTitle ||
+        meta?.pageTitle ||
+        selected?.pageTitle ||
+        previewRef.current.title ||
+        "",
+      capturedAt:
+        result.capturedAt ||
+        meta?.capturedAt ||
+        (result.kind === "selection" ? selected?.timestamp : undefined) ||
+        Date.now(),
+      screenshotPath: path || meta?.screenshotPath || null,
+      mode,
+      delivery: deliverySummary(result),
+    };
+  }
+
   useEffect(() => {
     if (!isElectron()) return;
     const api = window.vefg;
 
-    void api.getState().then((s) => {
-      setUrlInput(s.previewUrl);
-      setPickMode(s.pickMode);
-      setSelection(s.lastSelection);
-      setScreenshotPath(s.lastScreenshotPath);
-      setProjectCwd(s.projectCwd || "");
-      setTerminalAlive(Boolean(s.terminalAlive));
-      setCaptureBusy(Boolean((s as { captureBusy?: boolean }).captureBusy));
-      if (s.layout?.terminalWidth) setTerminalWidth(s.layout.terminalWidth);
-    });
+    void api
+      .getState()
+      .then((s) => {
+        const initialPreview = {
+          url: s.previewUrl,
+          loading: false,
+          ...(s.previewStatus || {}),
+        };
+        setUrlInput(initialPreview.url || s.previewUrl);
+        setPreview(initialPreview);
+        previewRef.current = initialPreview;
+        setPickMode(s.pickMode);
+        setSelection(s.lastSelection);
+        selectionRef.current = s.lastSelection;
+        setScreenshotPath(s.lastScreenshotPath);
+        screenshotPathRef.current = s.lastScreenshotPath;
+        setProjectCwd(s.projectCwd || "");
+        setRecentPreviewUrls(s.recentPreviewUrls || []);
+        setRecentProjectCwds(s.recentProjectCwds || []);
+        applyTerminalRuntime({
+          alive: s.terminalAlive,
+          shellAlive: s.shellAlive,
+          grokLaunchRequested: s.grokLaunchRequested,
+          grokReady: s.grokReady,
+          grokState: s.grokState,
+        });
+        setCaptureBusy(Boolean(s.captureBusy));
+        setFrameMode(s.frameMode || "viewport");
+        if (s.layout?.terminalWidth) setTerminalWidth(s.layout.terminalWidth);
+
+        const saved = s.lastCapture || s.lastCaptureMeta;
+        if (saved || s.lastSelection || s.lastScreenshotPath) {
+          const selected = saved?.selection ?? s.lastSelection;
+          setReceipt({
+            target: selectionLabelFor(selected) || "Preview viewport",
+            pageUrl:
+              saved?.pageUrl || selected?.pageUrl || initialPreview.url || "",
+            pageTitle:
+              saved?.pageTitle || selected?.pageTitle || initialPreview.title || "",
+            capturedAt: saved?.capturedAt || selected?.timestamp || Date.now(),
+            screenshotPath:
+              saved?.screenshotPath ?? s.lastScreenshotPath ?? null,
+            mode: saved?.captureMode || (selected ? "target-context" : "viewport"),
+            delivery: "Previous capture loaded; delivery state is unknown.",
+          });
+        }
+      })
+      .catch((err) => {
+        showToast(
+          `Could not read app state: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
 
     const offs = [
       api.on("preview:status", (p) => {
-        setPreview((prev) => ({ ...prev, ...(p as PreviewStatus) }));
+        const next = p as PreviewStatus;
+        setPreview((prev) => {
+          const merged = { ...prev, ...next };
+          previewRef.current = merged;
+          return merged;
+        });
+        if (typeof next.url === "string") {
+          setUrlInput(next.url);
+        }
       }),
       api.on("preview:pick-mode", (p) => {
         setPickMode(Boolean((p as { enabled: boolean }).enabled));
@@ -88,10 +344,12 @@ export default function App() {
           setTerminalWidth(b.terminalWidth);
         }
       }),
-      api.on("terminal:exit", () => setTerminalAlive(false)),
+      api.on("terminal:exit", () => {
+        setTerminalAlive(false);
+        setGrokState((current) => (current === "idle" ? "idle" : "exited"));
+      }),
       api.on("terminal:status", (p) => {
-        const st = p as { alive?: boolean };
-        if (typeof st.alive === "boolean") setTerminalAlive(st.alive);
+        applyTerminalRuntime(p as TerminalStatus);
       }),
       api.on("capture:busy", (p) => {
         const st = p as { busy?: boolean };
@@ -109,35 +367,43 @@ export default function App() {
           showToast(r.message || "Couldn't capture");
           return;
         }
-        if (r.selection) setSelection(r.selection);
+        const selected =
+          r.selection === undefined
+            ? r.captureMeta?.selection ?? selectionRef.current
+            : r.selection;
+        if (r.selection !== undefined) {
+          setSelection(r.selection || null);
+          selectionRef.current = r.selection || null;
+        }
+        const nextPath =
+          r.screenshotPath ||
+          r.path ||
+          r.captureMeta?.screenshotPath ||
+          screenshotPathRef.current ||
+          null;
         if (r.screenshotPath || r.path) {
-          setScreenshotPath(r.screenshotPath || r.path || null);
+          setScreenshotPath(nextPath);
+          screenshotPathRef.current = nextPath;
         }
-        if (typeof r.terminalAlive === "boolean") {
-          setTerminalAlive(r.terminalAlive);
-        }
+        applyTerminalRuntime(r);
 
-        if (r.statusMessage) {
-          showToast(r.statusMessage);
-        } else if (r.kind === "selection" || r.kind === "screenshot") {
-          showToast(
-            r.pastedToTerminal
-              ? "Sent to Grok — type your change in the prompt, then Enter"
-              : "Captured — Start Grok, then Re-send (or ⌘V)",
+        const delivery = deliverySummary(r);
+        if (r.kind === "recopy" || r.kind === "deliver") {
+          setReceipt((previous) =>
+            previous
+              ? { ...previous, delivery }
+              : makeReceipt(r, selected || null, nextPath),
           );
-        } else if (r.kind === "recopy" || r.kind === "deliver") {
-          showToast(
-            r.pastedToTerminal
-              ? "Re-sent last capture to Grok"
-              : "Copied last capture to clipboard",
-          );
+        } else {
+          setReceipt(makeReceipt(r, selected || null, nextPath));
         }
+        showToast(delivery);
       }),
     ];
 
     // Global Esc in renderer (shell focused) also cancels Aim via IPC
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && pickMode) {
+      if (e.key === "Escape" && pickModeRef.current) {
         e.preventDefault();
         void api.setPickMode(false);
       }
@@ -162,11 +428,7 @@ export default function App() {
       offs.forEach((off) => off());
       window.removeEventListener("keydown", onKey);
     };
-  }, [pickMode]);
-
-  const togglePickRef = useRef(async () => {});
-  const onScreenshotRef = useRef(async () => {});
-  const onResendRef = useRef(async () => {});
+  }, []);
 
   async function onNavigate(e?: FormEvent) {
     e?.preventDefault();
@@ -175,7 +437,26 @@ export default function App() {
     if (!url) return;
     if (!/^https?:\/\//i.test(url)) url = `http://${url}`;
     setUrlInput(url);
-    await window.vefg.navigate(url);
+    setRecentPreviewUrls((current) => [
+      url,
+      ...current.filter((item) => item !== url),
+    ].slice(0, 8));
+    setPreview((current) => ({
+      ...current,
+      url,
+      loading: true,
+      error: null,
+    }));
+    try {
+      const result = await window.vefg.navigate(url);
+      if (result.status) {
+        setPreview((current) => ({ ...current, ...result.status }));
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setPreview((current) => ({ ...current, loading: false, error: message }));
+      showToast(`Preview navigation failed: ${message}`);
+    }
   }
 
   async function togglePick() {
@@ -192,12 +473,26 @@ export default function App() {
 
   async function onScreenshot() {
     if (!isElectron() || captureBusy) return;
+    const requestedMode = frameMode;
+    const effectiveMode =
+      requestedMode === "target-context" &&
+      (!selection || preview.selectionStale)
+        ? "viewport"
+        : requestedMode;
+    if (effectiveMode !== requestedMode) {
+      setFrameMode("viewport");
+      showToast(
+        preview.selectionStale
+          ? "The target belongs to an earlier page, so Frame will capture the full viewport."
+          : "No target is selected, so Frame will capture the full viewport.",
+      );
+    }
     if (!terminalAlive) {
-      showToast("Start Grok first for auto-send (or capture will copy only).");
+      showToast("Shell is off; the capture will be copied for manual paste.");
     }
     setCaptureBusy(true);
     try {
-      await window.vefg.screenshot();
+      await window.vefg.screenshot({ mode: effectiveMode });
     } catch (err) {
       showToast(err instanceof Error ? err.message : String(err));
     } finally {
@@ -228,25 +523,91 @@ export default function App() {
     if (!isElectron()) return;
     await window.vefg.clearCapture();
     setSelection(null);
+    selectionRef.current = null;
     setScreenshotPath(null);
+    screenshotPathRef.current = null;
+    setReceipt(null);
+    setReceiptThumbnail(null);
+    setFrameMode("viewport");
     showToast("Cleared last capture");
+  }
+
+  async function onOpenCaptureFolder() {
+    if (!isElectron()) return;
+    try {
+      const result = await window.vefg.openCaptureFolder();
+      showToast(`Opened frames: ${shortPath(result.path, 54)}`);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : String(err));
+    }
   }
 
   async function onPickCwd() {
     if (!isElectron()) return;
-    const { projectCwd: cwd } = await window.vefg.pickProjectDir();
+    const { projectCwd: cwd, terminalRestarted, canceled } =
+      await window.vefg.pickProjectDir();
+    if (canceled) return;
     setProjectCwd(cwd);
-    showToast(`Working folder: ${cwd}`);
+    if (cwd) {
+      setRecentProjectCwds((current) => [
+        cwd,
+        ...current.filter((item) => item !== cwd),
+      ].slice(0, 8));
+      setGrokState("idle");
+      showToast(
+        terminalRestarted
+          ? `Project switched and terminal restarted: ${cwd}`
+          : `Project folder selected: ${cwd}`,
+      );
+    }
+  }
+
+  async function onRecentProject(cwd: string) {
+    if (!isElectron() || !cwd || cwd === projectCwd) return;
+    try {
+      const result = await window.vefg.setProjectDir(cwd);
+      if (result.canceled) return;
+      setProjectCwd(result.projectCwd);
+      setRecentProjectCwds((current) => [
+        result.projectCwd,
+        ...current.filter((item) => item !== result.projectCwd),
+      ].slice(0, 8));
+      setGrokState("idle");
+      showToast(
+        result.terminalRestarted
+          ? `Project switched and terminal restarted: ${result.projectCwd}`
+          : `Project switched: ${result.projectCwd}`,
+      );
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : String(err));
+    }
   }
 
   async function onLaunchGrok() {
     if (!isElectron()) return;
+    const now = Date.now();
+    if (now - lastLaunchAtRef.current < 1800) {
+      showToast("Grok launch was already requested; check the left terminal.");
+      return;
+    }
+    lastLaunchAtRef.current = now;
+    setGrokState("launching");
     try {
-      await window.vefg.terminalLaunchGrok();
-      setTerminalAlive(true);
-      showToast("Grok started — Aim when the prompt is ready");
+      const result = await window.vefg.terminalLaunchGrok();
+      applyTerminalRuntime({
+        ...result,
+        shellAlive: result.shellAlive ?? result.terminalAlive ?? true,
+        grokLaunchRequested:
+          result.grokLaunchRequested ?? (result.grokReady ? undefined : true),
+      });
+      showToast(
+        result.grokReady
+          ? "Grok reported ready."
+          : "Grok launch requested — confirm its prompt in the left terminal.",
+      );
       focusGrokTerminal();
     } catch (err) {
+      setGrokState("idle");
       showToast(err instanceof Error ? err.message : String(err));
     }
   }
@@ -256,11 +617,42 @@ export default function App() {
     try {
       await window.vefg.terminalRestart({});
       setTerminalAlive(true);
-      showToast("Terminal restarted");
+      setGrokState("idle");
+      lastLaunchAtRef.current = 0;
+      showToast("Shell restarted — launch Grok when ready");
     } catch (err) {
       showToast(err instanceof Error ? err.message : String(err));
     }
   }
+
+  const clampTerminalWidth = useCallback((width: number) => {
+    const max = Math.max(
+      MIN_TERMINAL_WIDTH,
+      window.innerWidth - MIN_PREVIEW_WIDTH - SPLITTER_WIDTH,
+    );
+    return Math.max(MIN_TERMINAL_WIDTH, Math.min(max, width));
+  }, []);
+
+  const commitTerminalWidth = useCallback(
+    (width: number, force = false) => {
+      const next = clampTerminalWidth(width);
+      setTerminalWidth(next);
+      if (isElectron()) {
+        void window.vefg
+          .setSplit(next / window.innerWidth, force ? { force: true } : undefined)
+          .then((bounds) => {
+            if (force && bounds.terminalWidth) {
+              setTerminalWidth(bounds.terminalWidth);
+            }
+          })
+          .catch(() => {
+            // Keep the local split usable if the native view is closing.
+          });
+      }
+      return next;
+    },
+    [clampTerminalWidth],
+  );
 
   const onSplitterDown = useCallback(
     (e: ReactMouseEvent) => {
@@ -271,40 +663,71 @@ export default function App() {
       let latest = startW;
 
       const onMove = (ev: MouseEvent) => {
-        latest = Math.max(
-          320,
-          Math.min(window.innerWidth - 380, startW + (ev.clientX - startX)),
-        );
-        setTerminalWidth(latest);
-        if (isElectron()) {
-          // Live layout only; main debounces disk persist
-          void window.vefg.setSplit(latest / window.innerWidth);
-        }
+        latest = commitTerminalWidth(startW + (ev.clientX - startX));
       };
       const onUp = () => {
         dragging.current = false;
         window.removeEventListener("mousemove", onMove);
         window.removeEventListener("mouseup", onUp);
-        if (isElectron()) {
-          // Final flush to disk
-          void window.vefg.setSplit(latest / window.innerWidth, {
-            force: true,
-          });
-        }
+        commitTerminalWidth(latest, true);
       };
       window.addEventListener("mousemove", onMove);
       window.addEventListener("mouseup", onUp);
     },
-    [terminalWidth],
+    [commitTerminalWidth, terminalWidth],
   );
 
-  const selectionLabel = selection
-    ? `<${selection.tag}>${selection.id ? `#${selection.id}` : ""}${
-        selection.classes?.[0] ? `.${selection.classes[0]}` : ""
-      }`
-    : null;
+  const onSplitterKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLDivElement>) => {
+      const step = e.shiftKey ? 48 : 16;
+      let next: number | null = null;
+      if (e.key === "ArrowLeft") next = terminalWidth - step;
+      if (e.key === "ArrowRight") next = terminalWidth + step;
+      if (e.key === "Home") next = MIN_TERMINAL_WIDTH;
+      if (e.key === "End") next = window.innerWidth;
+      if (next == null) return;
+      e.preventDefault();
+      commitTerminalWidth(next, true);
+    },
+    [commitTerminalWidth, terminalWidth],
+  );
+
+  const selectionLabel = selectionLabelFor(selection);
 
   const hasCapture = Boolean(selection || screenshotPath);
+  const previewCapturable = Boolean(
+    preview.url && !preview.loading && !preview.error && !preview.isWelcome,
+  );
+  const setupOnboarding =
+    !hasCapture ||
+    (Boolean(preview.error) && isDefaultPreview(preview.url));
+  const grokLabel =
+    grokState === "ready"
+      ? "grok ready"
+      : grokState === "launching"
+        ? "grok launching"
+        : grokState === "launch-requested"
+          ? "grok requested"
+          : grokState === "exited"
+            ? "grok exited"
+            : "grok not started";
+  const launchDisabled =
+    grokState === "launching" ||
+    grokState === "launch-requested" ||
+    grokState === "ready";
+  const launchLabel =
+    grokState === "launching"
+      ? "Launching…"
+      : grokState === "launch-requested"
+        ? "Launch requested"
+        : grokState === "ready"
+          ? "Grok ready"
+          : "Start Grok";
+  const maxTerminalWidth = Math.max(
+    MIN_TERMINAL_WIDTH,
+    window.innerWidth - MIN_PREVIEW_WIDTH - SPLITTER_WIDTH,
+  );
+  const splitPercent = Math.round((terminalWidth / window.innerWidth) * 100);
 
   return (
     <div className="shell">
@@ -320,12 +743,17 @@ export default function App() {
             </div>
           </div>
 
-          <form className="url-form" onSubmit={onNavigate}>
+          <form
+            className={`url-form ${preview.loading ? "loading" : ""}`}
+            onSubmit={onNavigate}
+            aria-busy={Boolean(preview.loading)}
+          >
             <button
               type="button"
               className="icon-btn"
               title="Back"
               aria-label="Go back in preview"
+              disabled={preview.canGoBack === false}
               onClick={() => void window.vefg?.goBack()}
             >
               <IconChevronLeft />
@@ -335,6 +763,7 @@ export default function App() {
               className="icon-btn"
               title="Forward"
               aria-label="Go forward in preview"
+              disabled={preview.canGoForward === false}
               onClick={() => void window.vefg?.goForward()}
             >
               <IconChevronRight />
@@ -351,11 +780,24 @@ export default function App() {
             <input
               className="url-input"
               value={urlInput}
+              list="recent-preview-urls"
               onChange={(e) => setUrlInput(e.target.value)}
               placeholder="http://127.0.0.1:5173"
               spellCheck={false}
               aria-label="Preview URL"
             />
+            <datalist id="recent-preview-urls">
+              {recentPreviewUrls.map((url) => (
+                <option value={url} key={url} />
+              ))}
+            </datalist>
+            {preview.loading ? (
+              <span
+                className="url-loading-spinner"
+                role="progressbar"
+                aria-label="Loading preview"
+              />
+            ) : null}
             <button type="submit" className="url-go" aria-label="Open URL">
               Go
             </button>
@@ -364,7 +806,7 @@ export default function App() {
           {/* Empty titlebar region: drag the window */}
           <div className="titlebar-drag-spacer" aria-hidden />
 
-          <div className="toolbar-actions" role="toolbar" aria-label="Capture actions">
+          <div className="toolbar-actions" role="group" aria-label="Capture actions">
             <button
               type="button"
               className="btn btn-ghost"
@@ -375,25 +817,50 @@ export default function App() {
               <IconFolder />
               Folder
             </button>
+            {recentProjectCwds.length > 1 ? (
+              <select
+                className="recent-project-select"
+                value=""
+                onChange={(event) => {
+                  void onRecentProject(event.target.value);
+                }}
+                aria-label="Switch to recent project folder"
+                title="Recent project folders"
+              >
+                <option value="">Recent…</option>
+                {recentProjectCwds.map((cwd) => (
+                  <option value={cwd} key={cwd} disabled={cwd === projectCwd}>
+                    {shortPath(cwd, 30)}
+                  </option>
+                ))}
+              </select>
+            ) : null}
             <button
               type="button"
               className="btn btn-primary"
               onClick={() => void onLaunchGrok()}
-              title="Run grok in the left terminal"
+              disabled={launchDisabled}
+              title={
+                grokState === "launch-requested"
+                  ? "Launch was requested. Confirm the Grok prompt on the left; Reset term to start over."
+                  : grokState === "ready"
+                    ? "Grok readiness was reported by the terminal runtime"
+                    : "Request Grok to start in the left terminal"
+              }
               aria-label="Start Grok in terminal"
             >
               <IconPlay />
-              Start Grok
+              {launchLabel}
             </button>
             <button
               type="button"
               className={`btn btn-pick ${pickMode ? "active" : ""}`}
               onClick={() => void togglePick()}
-              disabled={captureBusy}
+              disabled={captureBusy || (!pickMode && !previewCapturable)}
               title={
                 captureBusy
                   ? "Capture in progress — wait a moment"
-                  : "Aim (⌘⇧A) — click an element; context goes into Grok"
+                  : "Aim (⌘⇧A) — capture image + DOM context for Grok"
               }
               aria-label={pickMode ? "Cancel aim mode" : "Aim at page element"}
               aria-pressed={pickMode}
@@ -402,22 +869,50 @@ export default function App() {
               <IconCrosshair />
               {pickMode ? "Aiming… Esc" : "Aim"}
             </button>
-            <button
-              type="button"
-              className="btn"
-              disabled={captureBusy}
-              onClick={() => void onScreenshot()}
-              title={
-                captureBusy
-                  ? "Capture in progress — wait a moment"
-                  : "Frame (⌘⇧F) — grab preview into Grok"
-              }
-              aria-label="Capture preview frame"
-              aria-busy={captureBusy}
-            >
-              <IconCamera />
-              {captureBusy ? "…" : "Frame"}
-            </button>
+            <div className="frame-control">
+              <select
+                className="frame-mode-select"
+                value={frameMode}
+                onChange={(e) => setFrameMode(e.target.value as FrameMode)}
+                disabled={captureBusy || !previewCapturable}
+                aria-label="Frame capture area"
+                title={
+                  frameMode === "viewport"
+                    ? "Capture the full visible preview"
+                    : "Capture the selected target with surrounding context"
+                }
+              >
+                <option value="viewport">Full view</option>
+                <option
+                  value="target-context"
+                  disabled={!selection || preview.selectionStale}
+                >
+                  Target
+                </option>
+              </select>
+              <button
+                type="button"
+                className="btn frame-button"
+                disabled={captureBusy || !previewCapturable}
+                onClick={() => void onScreenshot()}
+                title={
+                  captureBusy
+                    ? "Capture in progress — wait a moment"
+                    : frameMode === "viewport"
+                      ? "Frame full viewport (⌘⇧F)"
+                      : "Frame selected target with context (⌘⇧F)"
+                }
+                aria-label={`Capture ${
+                  frameMode === "viewport"
+                    ? "full preview viewport"
+                    : "selected target with context"
+                }`}
+                aria-busy={captureBusy}
+              >
+                <IconCamera />
+                {captureBusy ? "…" : "Frame"}
+              </button>
+            </div>
             <button
               type="button"
               className="btn"
@@ -443,29 +938,151 @@ export default function App() {
           className="status-strip"
           role="status"
           aria-live="polite"
-          aria-atomic="true"
+          aria-atomic="false"
         >
-          {preview.error ? (
-            <div className="banner-inline">
-              Preview failed: {preview.error}
-              <span className="hint"> · is the page running? Try Go / ⌘R</span>
-            </div>
-          ) : captureBusy ? (
+          {captureBusy ? (
             <div className="banner-inline pick">
               Busy — capture in flight · Aim / Frame / Re-send paused
             </div>
           ) : pickMode ? (
             <div className="banner-inline pick">
-              Aiming — click a node on the right · Esc cancels · image + DOM → Grok
+              {grokState === "launch-requested" || grokState === "ready"
+                ? "Aiming — click a node on the right · Esc cancels · image + DOM paste will be attempted in Grok"
+                : "Aiming — click a node on the right · Esc cancels · Grok is not running, so the capture will stay on the clipboard"}
             </div>
           ) : toast ? (
             <div className="toast-inline">{toast}</div>
+          ) : setupOnboarding ? (
+            <div
+              className={`setup-inline ${preview.error ? "error" : ""}`}
+              title={preview.error || undefined}
+            >
+              <strong>
+                {preview.error
+                  ? isDefaultPreview(preview.url)
+                    ? "Default preview isn’t running."
+                    : "Preview isn’t loading."
+                  : "First capture:"}
+              </strong>
+              <span>
+                <b>1</b> Folder
+              </span>
+              <span>
+                <b>2</b> Start Grok
+              </span>
+              <span>
+                <b>3</b> URL → Go
+              </span>
+              <span>
+                <b>4</b> Aim, then write the change in Grok
+              </span>
+              <span className={`term-pill ${terminalAlive ? "on" : "off"}`}>
+                {terminalAlive ? "pty on" : "pty off"}
+              </span>
+              <span className={`term-pill grok ${grokState}`}>{grokLabel}</span>
+              <button
+                type="button"
+                className="link-btn setup-reset"
+                onClick={() => void onRestartTerminal()}
+              >
+                Reset term
+              </button>
+            </div>
+          ) : preview.error ? (
+            <div className="banner-inline">
+              Preview failed: {preview.error}
+              <span className="hint"> · is the page running? Try Go / ⌘R</span>
+            </div>
           ) : (
             <>
-              <span className={`chip-tag ${selectionLabel ? "" : "muted"}`}>
+              {preview.loading ? (
+                <span className="preview-loading-chip">preview loading…</span>
+              ) : null}
+              <span
+                className={`chip-tag ${selectionLabel ? "" : "muted"} ${preview.selectionStale ? "stale" : ""}`}
+                title={
+                  preview.selectionStale
+                    ? "This target belongs to a previous page; Re-send keeps its old screenshot, while a new Frame uses the current viewport."
+                    : undefined
+                }
+              >
                 {selectionLabel || "no target"}
+                {preview.selectionStale ? " · prior page" : ""}
               </span>
-              {screenshotPath ? (
+              {receipt ? (
+                <details className="capture-receipt">
+                  <summary
+                    className="chip-shot"
+                    title={receipt.screenshotPath || "Last capture receipt"}
+                  >
+                    Last capture
+                  </summary>
+                  <div
+                    className="receipt-card"
+                    style={{
+                      width: Math.max(220, Math.min(460, terminalWidth - 90)),
+                    }}
+                  >
+                    <div className="receipt-heading">
+                      <span className="receipt-icon" aria-hidden>
+                        <IconCamera />
+                      </span>
+                      <div>
+                        <strong>Capture receipt</strong>
+                        <span>{formatReceiptTime(receipt.capturedAt)}</span>
+                      </div>
+                    </div>
+                    {receiptThumbnail ? (
+                      <img
+                        className="receipt-thumbnail"
+                        src={receiptThumbnail}
+                        alt={`Last capture: ${receipt.target}`}
+                      />
+                    ) : null}
+                    <dl className="receipt-grid">
+                      <dt>Target</dt>
+                      <dd title={receipt.target}>{receipt.target}</dd>
+                      <dt>Page</dt>
+                      <dd title={receipt.pageUrl || receipt.pageTitle}>
+                        {shortPath(
+                          receipt.pageTitle || receipt.pageUrl || "Unknown page",
+                          58,
+                        )}
+                      </dd>
+                      <dt>Frame</dt>
+                      <dd title={receipt.screenshotPath || undefined}>
+                        {receipt.screenshotPath
+                          ? shortPath(receipt.screenshotPath, 58)
+                          : "No local image path"}
+                      </dd>
+                      <dt>Mode</dt>
+                      <dd>
+                        {receipt.mode === "viewport"
+                          ? "Full viewport"
+                          : "Target + context"}
+                      </dd>
+                      <dt>Delivery</dt>
+                      <dd className="receipt-delivery">{receipt.delivery}</dd>
+                    </dl>
+                    <div className="receipt-actions">
+                      <button
+                        type="button"
+                        className="link-btn"
+                        onClick={() => void onOpenCaptureFolder()}
+                      >
+                        Open frames folder
+                      </button>
+                      <button
+                        type="button"
+                        className="link-btn danger"
+                        onClick={() => void onClear()}
+                      >
+                        Clear capture
+                      </button>
+                    </div>
+                  </div>
+                </details>
+              ) : screenshotPath ? (
                 <span className="chip-shot" title={screenshotPath}>
                   frame
                 </span>
@@ -474,11 +1091,23 @@ export default function App() {
                 className={`term-pill ${terminalAlive ? "on" : "off"}`}
                 title={
                   terminalAlive
-                    ? "Terminal session alive"
-                    : "Start Grok for auto-send"
+                    ? "PTY process is alive; the adjacent badge reports whether it is Grok"
+                    : "PTY process is not running"
                 }
               >
-                {terminalAlive ? "terminal on" : "terminal off"}
+                {terminalAlive ? "pty on" : "pty off"}
+              </span>
+              <span
+                className={`term-pill grok ${grokState}`}
+                title={
+                  grokState === "ready"
+                    ? "The terminal runtime explicitly reported Grok ready"
+                    : grokState === "launch-requested"
+                      ? "Launch was requested; confirm the Grok prompt on the left"
+                      : "Grok readiness is not confirmed"
+                }
+              >
+                {grokLabel}
               </span>
               <span
                 className="chip-selector muted-hint"
@@ -486,7 +1115,7 @@ export default function App() {
               >
                 {projectCwd
                   ? shortPath(projectCwd)
-                  : "Aim → Grok gets image + DOM → type change in Grok"}
+                  : "Choose Folder to anchor edits to your project"}
               </span>
               <div className="chip-actions">
                 <button
@@ -497,26 +1126,6 @@ export default function App() {
                 >
                   Reset term
                 </button>
-                {hasCapture && (
-                  <>
-                    <button
-                      type="button"
-                      className="link-btn"
-                      onClick={() => void window.vefg?.openCaptureFolder()}
-                      aria-label="Open frames folder"
-                    >
-                      Frames
-                    </button>
-                    <button
-                      type="button"
-                      className="link-btn danger"
-                      onClick={() => void onClear()}
-                      aria-label="Clear last capture"
-                    >
-                      Clear
-                    </button>
-                  </>
-                )}
               </div>
             </>
           )}
@@ -525,6 +1134,7 @@ export default function App() {
 
       <div className="workspace">
         <section
+          id="terminal-pane"
           className="terminal-pane"
           style={{ width: terminalWidth }}
           aria-label="Grok terminal"
@@ -541,13 +1151,24 @@ export default function App() {
         <div
           className="splitter"
           onMouseDown={onSplitterDown}
-          title="Drag to resize panes"
+          onKeyDown={onSplitterKeyDown}
+          tabIndex={0}
+          title="Drag, or use Left/Right arrows to resize panes"
           role="separator"
           aria-orientation="vertical"
           aria-label="Resize terminal and preview"
+          aria-controls="terminal-pane preview-pane"
+          aria-valuemin={MIN_TERMINAL_WIDTH}
+          aria-valuemax={maxTerminalWidth}
+          aria-valuenow={Math.round(terminalWidth)}
+          aria-valuetext={`${splitPercent}% terminal width`}
         />
 
-        <section className="preview-pane" aria-label="Website preview">
+        <section
+          id="preview-pane"
+          className="preview-pane"
+          aria-label="Website preview"
+        >
           <div className="preview-area" aria-hidden />
         </section>
       </div>

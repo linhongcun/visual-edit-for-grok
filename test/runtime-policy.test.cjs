@@ -5,6 +5,13 @@
 const assert = require("assert");
 const {
   canStartCapture,
+  validateAimEvent,
+  normalizeViewport,
+  stampSelectionContext,
+  samePreviewIdentity,
+  evaluateSelectionFreshness,
+  evaluateSelectionStability,
+  planFrameCapture,
   shouldRunCleanup,
   shouldFlushSettings,
   focusHandoffDelays,
@@ -14,6 +21,47 @@ const {
   DEFAULT_CLEANUP_MIN_INTERVAL_MS,
   DEFAULT_SETTINGS_DEBOUNCE_MS,
 } = require("../electron/runtime-policy.cjs");
+
+const currentPreview = {
+  pageUrl: "http://127.0.0.1:8765/products?mode=grid",
+  navigationToken: "nav-token-7",
+  navigationId: 7,
+  sourceId: 42,
+  viewport: {
+    width: 1280,
+    height: 720,
+    devicePixelRatio: 2,
+  },
+  scroll: { x: 0, y: 240 },
+};
+
+function validAimInput(overrides = {}) {
+  return {
+    pickMode: true,
+    inFlight: false,
+    event: {
+      captureContext: {
+        navigationToken: currentPreview.navigationToken,
+        navigationId: currentPreview.navigationId,
+        sourceId: currentPreview.sourceId,
+      },
+    },
+    current: currentPreview,
+    ...overrides,
+  };
+}
+
+function contextualSelection() {
+  return stampSelectionContext(
+    {
+      tag: "button",
+      selector: "button#cta",
+      pageUrl: currentPreview.pageUrl,
+      boundingBox: { top: 30, left: 40, width: 120, height: 48 },
+    },
+    currentPreview,
+  );
+}
 
 function testCanStartWhenIdle() {
   const r = canStartCapture({ inFlight: false });
@@ -26,6 +74,221 @@ function testRejectWhenBusy() {
   assert.strictEqual(r.ok, false);
   assert.strictEqual(r.reason, "busy");
   assert.ok(r.statusMessage && r.statusMessage.includes("progress"));
+}
+
+function testAimEventRequiresActivePickMode() {
+  const result = validateAimEvent(validAimInput({ pickMode: false }));
+  assert.strictEqual(result.proceed, false);
+  assert.strictEqual(result.reason, "aim-inactive");
+  assert.strictEqual(result.cancelPickMode, false);
+}
+
+function testAimEventRequiresIdleCapture() {
+  const result = validateAimEvent(validAimInput({ inFlight: true }));
+  assert.strictEqual(result.proceed, false);
+  assert.strictEqual(result.reason, "busy");
+}
+
+function testAimEventAcceptsCurrentTrustedDocument() {
+  const result = validateAimEvent(validAimInput());
+  assert.strictEqual(result.ok, true);
+  assert.strictEqual(result.proceed, true);
+  assert.strictEqual(result.reason, null);
+}
+
+function testAimEventRejectsStaleNavigationToken() {
+  const input = validAimInput();
+  input.event.captureContext.navigationToken = "nav-token-6";
+  const result = validateAimEvent(input);
+  assert.strictEqual(result.proceed, false);
+  assert.strictEqual(result.reason, "stale-navigation-token");
+}
+
+function testAimEventRejectsStaleNavigationId() {
+  const input = validAimInput();
+  input.event.captureContext.navigationId = 6;
+  const result = validateAimEvent(input);
+  assert.strictEqual(result.proceed, false);
+  assert.strictEqual(result.reason, "stale-navigation-id");
+}
+
+function testAimEventRejectsWrongSource() {
+  const input = validAimInput();
+  input.event.captureContext.sourceId = 99;
+  const result = validateAimEvent(input);
+  assert.strictEqual(result.proceed, false);
+  assert.strictEqual(result.reason, "source-mismatch");
+}
+
+function testAimEventRejectsMissingIdentityEvidence() {
+  const result = validateAimEvent({
+    pickMode: true,
+    event: {},
+    current: currentPreview,
+  });
+  assert.strictEqual(result.proceed, false);
+  assert.strictEqual(result.reason, "missing-navigation-token");
+}
+
+function testFreshSelectionUsesTargetBounds() {
+  const selection = contextualSelection();
+  const result = planFrameCapture({ selection, current: currentPreview });
+  assert.strictEqual(result.selectionFresh, true);
+  assert.strictEqual(result.captureMode, "target");
+  assert.strictEqual(result.useTargetBounds, true);
+  assert.strictEqual(result.selectionForPayload, selection);
+  assert.strictEqual(result.bounds, selection.boundingBox);
+}
+
+function testUrlChangeFallsBackAndDropsOldDom() {
+  const selection = contextualSelection();
+  const result = planFrameCapture({
+    selection,
+    current: { ...currentPreview, pageUrl: "http://127.0.0.1:8765/cart" },
+  });
+  assert.strictEqual(result.selectionFresh, false);
+  assert.strictEqual(result.reason, "url-changed");
+  assert.strictEqual(result.captureMode, "viewport");
+  assert.strictEqual(result.bounds, null);
+  assert.strictEqual(result.selectionForPayload, null);
+  assert.strictEqual(result.preservePreviousSelection, false);
+}
+
+function testOffscreenTargetFallsBackAndDropsDom() {
+  const selection = {
+    ...contextualSelection(),
+    boundingBox: { top: 800, left: 40, width: 120, height: 48 },
+  };
+  const result = planFrameCapture({ selection, current: currentPreview });
+  assert.strictEqual(result.selectionFresh, true);
+  assert.strictEqual(result.captureMode, "viewport");
+  assert.strictEqual(result.reason, "target-outside-viewport");
+  assert.strictEqual(result.bounds, null);
+  assert.strictEqual(result.selectionForPayload, null);
+  assert.strictEqual(result.preservePreviousSelection, false);
+}
+
+function testInvalidTargetBoundsFallsBackAndDropsDom() {
+  const selection = {
+    ...contextualSelection(),
+    boundingBox: { top: 30, left: 40, width: 0, height: 48 },
+  };
+  const result = planFrameCapture({ selection, current: currentPreview });
+  assert.strictEqual(result.captureMode, "viewport");
+  assert.strictEqual(result.reason, "invalid-target-bounds");
+  assert.strictEqual(result.selectionForPayload, null);
+}
+
+function testNavigationChangeFallsBackAndDropsOldDom() {
+  const result = planFrameCapture({
+    selection: contextualSelection(),
+    current: {
+      ...currentPreview,
+      navigationToken: "nav-token-8",
+      navigationId: 8,
+    },
+  });
+  assert.strictEqual(result.selectionFresh, false);
+  assert.strictEqual(result.reason, "navigation-changed");
+  assert.strictEqual(result.selectionForPayload, null);
+}
+
+function testViewportOrScrollChangeDropsOldDom() {
+  const result = planFrameCapture({
+    selection: contextualSelection(),
+    current: {
+      ...currentPreview,
+      viewport: { ...currentPreview.viewport, scrollY: 400 },
+    },
+  });
+  assert.strictEqual(result.selectionFresh, false);
+  assert.strictEqual(result.reason, "viewport-changed");
+  assert.strictEqual(result.selectionForPayload, null);
+}
+
+function testTinyViewportRoundingDifferenceIsFresh() {
+  const result = evaluateSelectionFreshness({
+    selection: contextualSelection(),
+    current: {
+      ...currentPreview,
+      viewport: { ...currentPreview.viewport, width: 1280.5, scrollY: 240.5 },
+    },
+  });
+  assert.strictEqual(result.fresh, true);
+}
+
+function testNormalizerAcceptsSplitViewportAndScrollSnapshot() {
+  assert.deepStrictEqual(normalizeViewport(currentPreview), {
+    width: 1280,
+    height: 720,
+    scrollX: 0,
+    scrollY: 240,
+    devicePixelRatio: 2,
+  });
+}
+
+function testPreviewIdentityMustRemainCommittedAndIdle() {
+  const before = {
+    webContentsId: 42,
+    navigationId: 7,
+    navigationToken: "nav-token-7",
+    url: currentPreview.pageUrl,
+  };
+  assert.strictEqual(
+    samePreviewIdentity(before, {
+      ...before,
+      loading: false,
+    }),
+    true,
+  );
+  assert.strictEqual(samePreviewIdentity(before, { ...before, loading: true }), false);
+  assert.strictEqual(
+    samePreviewIdentity(before, { ...before, navigationId: 8, loading: false }),
+    false,
+  );
+}
+
+function testSelectionStabilityAcceptsUnchangedTarget() {
+  const before = contextualSelection();
+  const after = {
+    ...before,
+    boundingBox: { ...before.boundingBox, left: 40.5, x: 40.5 },
+  };
+  assert.deepStrictEqual(evaluateSelectionStability({ before, after }), {
+    stable: true,
+    reason: null,
+  });
+}
+
+function testSelectionStabilityRejectsMovingTarget() {
+  const before = contextualSelection();
+  const after = {
+    ...before,
+    boundingBox: { ...before.boundingBox, left: 52, x: 52 },
+  };
+  assert.deepStrictEqual(evaluateSelectionStability({ before, after }), {
+    stable: false,
+    reason: "target-moved",
+  });
+}
+
+function testSelectionStabilityRejectsChangedPayloadContent() {
+  const before = {
+    ...contextualSelection(),
+    text: "Save",
+    attributes: { "aria-pressed": "false" },
+    computedStyle: { color: "rgb(0, 0, 0)" },
+  };
+  const after = {
+    ...before,
+    text: "Saved",
+    attributes: { "aria-pressed": "true" },
+    computedStyle: { color: "rgb(0, 128, 0)" },
+  };
+  assert.deepStrictEqual(evaluateSelectionStability({ before, after }), {
+    stable: false,
+    reason: "target-content-changed",
+  });
 }
 
 function testCleanupNeverRun() {
@@ -229,6 +492,25 @@ function testCommitFrameOnlyUpdatesShotKeepsPrevSelection() {
   assert.strictEqual(r.lastScreenshotPath, "/tmp/frame.png");
 }
 
+function testStrictFrameCommitClearsStaleSelectionForNewShot() {
+  const prev = contextualSelection();
+  const framePlan = planFrameCapture({
+    selection: prev,
+    current: { ...currentPreview, pageUrl: "http://127.0.0.1:8765/new" },
+  });
+  const r = resolvePickCommit({
+    ok: true,
+    selection: framePlan.selectionForPayload,
+    screenshotPath: "/tmp/new-page-frame.png",
+    prevSelection: prev,
+    prevScreenshotPath: "/tmp/old-page-frame.png",
+    preservePreviousSelection: framePlan.preservePreviousSelection,
+  });
+  assert.strictEqual(r.committed, true);
+  assert.strictEqual(r.lastSelection, null);
+  assert.strictEqual(r.lastScreenshotPath, "/tmp/new-page-frame.png");
+}
+
 function testBusyRejectThenFailureNeverPairsNewDomWithOldShot() {
   // Overlapping Frame+Aim: busy reject must not leave half-committed pick
   const plan = planAimPickEvent({ inFlight: true });
@@ -257,6 +539,25 @@ function run() {
   const tests = [
     testCanStartWhenIdle,
     testRejectWhenBusy,
+    testAimEventRequiresActivePickMode,
+    testAimEventRequiresIdleCapture,
+    testAimEventAcceptsCurrentTrustedDocument,
+    testAimEventRejectsStaleNavigationToken,
+    testAimEventRejectsStaleNavigationId,
+    testAimEventRejectsWrongSource,
+    testAimEventRejectsMissingIdentityEvidence,
+    testFreshSelectionUsesTargetBounds,
+    testUrlChangeFallsBackAndDropsOldDom,
+    testOffscreenTargetFallsBackAndDropsDom,
+    testInvalidTargetBoundsFallsBackAndDropsDom,
+    testNavigationChangeFallsBackAndDropsOldDom,
+    testViewportOrScrollChangeDropsOldDom,
+    testTinyViewportRoundingDifferenceIsFresh,
+    testNormalizerAcceptsSplitViewportAndScrollSnapshot,
+    testPreviewIdentityMustRemainCommittedAndIdle,
+    testSelectionStabilityAcceptsUnchangedTarget,
+    testSelectionStabilityRejectsMovingTarget,
+    testSelectionStabilityRejectsChangedPayloadContent,
     testCleanupNeverRun,
     testCleanupThrottled,
     testCleanupIntervalElapsed,
@@ -275,6 +576,7 @@ function run() {
     testCommitFailureKeepsPreviousPair,
     testCommitRejectsSelectionWithoutShot,
     testCommitFrameOnlyUpdatesShotKeepsPrevSelection,
+    testStrictFrameCommitClearsStaleSelectionForNewShot,
     testBusyRejectThenFailureNeverPairsNewDomWithOldShot,
   ];
   let failed = 0;

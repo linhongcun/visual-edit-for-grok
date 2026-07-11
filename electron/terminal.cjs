@@ -34,6 +34,10 @@ function resolveGrokBinary() {
   return "grok";
 }
 
+function quoteForPosixShell(value) {
+  return `'${String(value).replace(/'/g, `'"'"'`)}'`;
+}
+
 /**
  * Build env for the embedded PTY with truecolor / 256-color forced on.
  * @param {NodeJS.ProcessEnv} base
@@ -88,6 +92,8 @@ class TerminalSession {
     this.onExit = options.onExit || (() => {});
     /** @type {import('node-pty').IPty | null} */
     this.pty = null;
+    /** @type {"shell" | "grok" | null} */
+    this.mode = null;
     this.cols = 80;
     this.rows = 24;
   }
@@ -96,39 +102,65 @@ class TerminalSession {
     return Boolean(this.pty);
   }
 
+  isGrokAlive() {
+    return Boolean(this.pty && this.mode === "grok");
+  }
+
+  getMode() {
+    return this.pty ? this.mode : null;
+  }
+
   /**
-   * @param {{ cwd?: string, cols?: number, rows?: number }} [opts]
+   * Replace the current PTY with a concrete program. Keeping the child identity
+   * in the exit callback prevents a late exit from an old process from marking
+   * a newly-started PTY as dead.
+   * @param {string} program
+   * @param {string[]} args
+   * @param {{ cwd?: string, cols?: number, rows?: number, mode: "shell" | "grok" }} opts
    */
-  start(opts = {}) {
+  spawnProgram(program, args, opts) {
     this.dispose();
     if (opts.cwd) this.cwd = opts.cwd;
     if (opts.cols) this.cols = opts.cols;
     if (opts.rows) this.rows = opts.rows;
 
     const pty = loadPty();
-    const shell =
-      process.env.SHELL ||
-      (process.platform === "win32" ? "powershell.exe" : "/bin/zsh");
-
-    // Force truecolor so Grok TUI (and chalk-style apps) match Warp/iTerm,
-    // not monochrome fallback when Electron inherits NO_COLOR/CI from the parent.
-    const env = buildColorfulEnv(process.env);
-
-    this.pty = pty.spawn(shell, ["-l"], {
+    const child = pty.spawn(program, args, {
       name: "xterm-256color",
       cols: this.cols,
       rows: this.rows,
       cwd: this.cwd,
-      env,
+      env: buildColorfulEnv(process.env),
     });
 
-    this.pty.onData((data) => this.onData(data));
-    this.pty.onExit(({ exitCode, signal }) => {
+    this.pty = child;
+    this.mode = opts.mode;
+    child.onData((data) => {
+      if (this.pty === child) this.onData(data);
+    });
+    child.onExit(({ exitCode, signal }) => {
+      if (this.pty !== child) return;
+      const mode = this.mode;
       this.pty = null;
-      this.onExit(exitCode ?? 0, signal);
+      this.mode = null;
+      this.onExit(exitCode ?? 0, signal, mode);
     });
 
-    return { cwd: this.cwd, shell };
+    return { cwd: this.cwd, program, mode: this.mode };
+  }
+
+  /**
+   * @param {{ cwd?: string, cols?: number, rows?: number }} [opts]
+   */
+  start(opts = {}) {
+    const shell =
+      process.env.SHELL ||
+      (process.platform === "win32" ? "powershell.exe" : "/bin/zsh");
+    const result = this.spawnProgram(shell, ["-l"], {
+      ...opts,
+      mode: "shell",
+    });
+    return { ...result, shell };
   }
 
   /**
@@ -161,11 +193,29 @@ class TerminalSession {
     return true;
   }
 
-  launchGrok() {
+  launchGrok(opts = {}) {
+    if (this.isGrokAlive()) {
+      return { cwd: this.cwd, program: resolveGrokBinary(), mode: "grok", alreadyRunning: true };
+    }
     const bin = resolveGrokBinary();
-    // Quote if path has spaces
-    const cmd = bin.includes(" ") ? `"${bin}"` : bin;
-    return this.runCommand(cmd);
+    const shell =
+      process.env.SHELL ||
+      (process.platform === "win32" ? "powershell.exe" : "/bin/zsh");
+    const useLoginShell = process.platform !== "win32";
+    const program = useLoginShell ? shell : bin;
+    const args = useLoginShell
+      ? ["-ilc", `exec ${quoteForPosixShell(bin)}`]
+      : [];
+    return {
+      ...this.spawnProgram(program, args, {
+        cwd: opts.cwd || this.cwd,
+        cols: opts.cols || this.cols,
+        rows: opts.rows || this.rows,
+        mode: "grok",
+      }),
+      program: bin,
+      alreadyRunning: false,
+    };
   }
 
   /**
@@ -194,14 +244,21 @@ class TerminalSession {
 
   dispose() {
     if (this.pty) {
+      const child = this.pty;
+      this.pty = null;
+      this.mode = null;
       try {
-        this.pty.kill();
+        child.kill();
       } catch {
         /* ignore */
       }
-      this.pty = null;
     }
   }
 }
 
-module.exports = { TerminalSession, resolveGrokBinary, buildColorfulEnv };
+module.exports = {
+  TerminalSession,
+  resolveGrokBinary,
+  buildColorfulEnv,
+  quoteForPosixShell,
+};

@@ -5,7 +5,7 @@ How to produce the **Visual Capture for Grok** macOS application from this repo.
 ## Prerequisites
 
 - macOS on **Apple Silicon** (`arm64`)
-- Node.js 20+ recommended (repo developed on Node 25)
+- Node.js 22.12+ (required by Electron 43 / `@electron/rebuild` 4)
 - Xcode Command Line Tools (for native `node-pty` rebuild)
 - `npm install` completed successfully
 
@@ -40,6 +40,8 @@ open -a "Visual Capture for Grok"
 | `npm run dist` | `.app` + `.dmg` |
 | `npm run dist:dmg` | DMG target (rebuilds package as needed) |
 | `npm run build` | Renderer only (`dist/`) |
+| `npm run test:electron` | Production build + isolated Electron integration smoke |
+| `npm run test:packaged` | Same integration smoke against `release/mac-arm64/*.app` |
 
 ## Config location
 
@@ -52,8 +54,9 @@ Packaging is configured in `package.json` → `"build"`:
 | `directories.output` | `release/` |
 | `directories.buildResources` | `build/` (icons) |
 | `asarUnpack` | `node_modules/node-pty/**` (required for PTY) |
+| `electronVersion` | `43.1.0` |
 | `mac.target` | `dir` + `dmg`, arch `arm64` |
-| `mac.identity` | `null` (unsigned local build) |
+| `mac.identity` | `"-"` (explicit ad-hoc local signature) |
 | `mac.icon` | `build/icon.icns` |
 
 ## Icons
@@ -80,7 +83,9 @@ If the packaged terminal fails to start, re-run `npm run dist` (do not only copy
 
 ## Signing & notarization
 
-Current release is **intentionally unsigned** (`identity: null`) for local use.
+Current release is **ad-hoc signed** (`identity: "-"`) so bundle integrity can
+be verified locally. It is still not Developer ID signed or notarized, so a
+first-launch Gatekeeper override may be required.
 
 For App Store / wide distribution you would need:
 

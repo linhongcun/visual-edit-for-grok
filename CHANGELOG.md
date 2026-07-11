@@ -2,6 +2,64 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.4.0] — 2026-07-11
+
+### Context integrity
+
+- Navigation-scoped Aim selections: URL, navigation token/id, trusted source,
+  viewport and scroll state travel with the captured DOM context.
+- Target Frame re-resolves the selector in the current document. A navigation,
+  missing target or stale context falls back to a viewport-only capture and
+  drops the old DOM instead of pairing it with new pixels.
+- Aim and target Frame verify navigation, viewport, geometry and emitted DOM
+  fields again after screenshot capture; a moving or changing target is discarded.
+- Frame now has explicit **Full view** and **Target + context** modes, with a
+  larger adaptive context crop.
+- Compact computed styles and viewport metadata are included in the Grok text;
+  secret-like attributes and URL credentials/query values are redacted.
+
+### Secure preview boundary
+
+- Replaced the page-spoofable `console.log` picker transport with a sandboxed,
+  isolated preview preload and authenticated IPC capability rotated per
+  navigation.
+- Aim events are accepted only from the current main frame while Aim is active.
+- Both renderer surfaces now use Electron sandboxing; preview permissions and
+  external URL schemes are restricted.
+
+### Terminal and delivery truthfulness
+
+- **Start Grok** now gives the PTY directly to the Grok process, so the app can
+  distinguish a shell from a running Grok process and prevent duplicate starts.
+- Changing Folder restarts the shell in the selected directory; the visible
+  project path and the process's real `pwd` can no longer diverge. Switching
+  while Grok is active requires confirmation before the session is stopped.
+- Delivery reports `attempted` versus `confirmed` explicitly. Image attachment
+  and Grok receipt are never claimed without an acknowledgement.
+- The image/file clipboard is restored after automatic delivery so manual ⌘V
+  remains a reliable fallback.
+
+### Workflow and UI
+
+- Bundled first-run welcome replaces the failing localhost demo default,
+  including a versioned migration for existing 0.3 settings.
+- Preview URL, history availability and loading state stay synchronized.
+- Aim / Frame / Re-send shortcuts work while the native preview owns focus.
+- Compact last-capture receipt shows target, page, timestamp, path, Frame mode
+  and delivery status.
+- Splitter supports keyboard arrows, Shift acceleration, Home/End and ARIA
+  values; blocked remote font imports were removed.
+
+### Runtime and verification
+
+- Electron `43.1.0` and `@electron/rebuild` `4.2.0`; official-registry audit is
+  clean and the arm64 `node-pty` ABI is rebuilt for Electron 43.
+- macOS bundles use an explicit ad-hoc signature for local integrity checks;
+  Developer ID signing and notarization remain out of scope.
+- 72 pure-helper tests plus an Electron/CDP integration smoke covering secure
+  Aim, forged-message rejection, stale-navigation fallback, real cwd, direct
+  Grok process state, duplicate launch prevention and preview-focused shortcuts.
+
 ## [0.3.0] — 2026-07-11
 
 ### Packaging
