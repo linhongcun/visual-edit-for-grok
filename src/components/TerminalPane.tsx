@@ -4,24 +4,62 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 
+/** Slightly smaller than 13 so the same pane fits more columns (helps wide CJK tables). */
+const TERM_FONT_SIZE = 12;
+
+/**
+ * Prefer mono fonts that measure CJK as double-width consistently.
+ * System CJK fallbacks after mono Latin faces.
+ */
+const TERM_FONT_FAMILY = [
+  "SFMono-Regular",
+  "Menlo",
+  "Monaco",
+  "Consolas",
+  "Sarasa Mono SC",
+  "Sarasa Term SC",
+  "Noto Sans Mono CJK SC",
+  "Source Han Mono SC",
+  "PingFang SC",
+  "Hiragino Sans GB",
+  "Microsoft YaHei Mono",
+  "ui-monospace",
+  "monospace",
+].join(", ");
+
 interface Props {
   active: boolean;
   /** Increment to force focus into the Grok/xterm input */
   focusNonce?: number;
+  /** Increment after splitter / layout settle to force fit + PTY resize */
+  fitNonce?: number;
 }
 
-export default function TerminalPane({ active, focusNonce = 0 }: Props) {
+export default function TerminalPane({
+  active,
+  focusNonce = 0,
+  fitNonce = 0,
+}: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const startedRef = useRef(false);
+  const lastDimsRef = useRef({ cols: 0, rows: 0 });
   /** Single pending deferred focus timer — avoid multi-timeout storms */
   const focusTimerRef = useRef<number | null>(null);
+  const resizeTimerRef = useRef<number | null>(null);
 
   function clearFocusTimer() {
     if (focusTimerRef.current != null) {
       window.clearTimeout(focusTimerRef.current);
       focusTimerRef.current = null;
+    }
+  }
+
+  function clearResizeTimer() {
+    if (resizeTimerRef.current != null) {
+      window.clearTimeout(resizeTimerRef.current);
+      resizeTimerRef.current = null;
     }
   }
 
@@ -56,14 +94,54 @@ export default function TerminalPane({ active, focusNonce = 0 }: Props) {
     });
   }
 
+  /**
+   * Fit xterm to host and push cols/rows to the PTY so Grok reflows to width.
+   * @param force when true, always notify PTY even if cols/rows unchanged
+   */
+  function fitAndSyncPty(force = false) {
+    const term = termRef.current;
+    const fit = fitRef.current;
+    if (!term || !fit) return;
+    try {
+      fit.fit();
+      const cols = term.cols;
+      const rows = term.rows;
+      if (cols < 2 || rows < 1) return;
+      const prev = lastDimsRef.current;
+      const changed = prev.cols !== cols || prev.rows !== rows;
+      if (!changed && !force) return;
+      lastDimsRef.current = { cols, rows };
+      if (startedRef.current && window.vefg) {
+        void window.vefg.terminalResize({ cols, rows });
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /** Debounce intermediate resizes; optional trailing force for splitter end. */
+  function scheduleFit(force = false, debounceMs = 48) {
+    clearResizeTimer();
+    if (force || debounceMs <= 0) {
+      requestAnimationFrame(() => fitAndSyncPty(force));
+      return;
+    }
+    resizeTimerRef.current = window.setTimeout(() => {
+      resizeTimerRef.current = null;
+      fitAndSyncPty(false);
+    }, debounceMs);
+  }
+
   useEffect(() => {
     if (!hostRef.current || !window.vefg) return;
 
     const term = new Terminal({
       cursorBlink: true,
-      fontSize: 13,
-      fontFamily:
-        '"SFMono-Regular", Menlo, Monaco, Consolas, ui-monospace, monospace',
+      fontSize: TERM_FONT_SIZE,
+      fontFamily: TERM_FONT_FAMILY,
+      // Tighter metrics → more columns in the same CSS width
+      lineHeight: 1.15,
+      letterSpacing: 0,
       theme: {
         background: "#0a0c10",
         foreground: "#e8eaef",
@@ -88,7 +166,9 @@ export default function TerminalPane({ active, focusNonce = 0 }: Props) {
         brightWhite: "#ffffff",
       },
       allowProposedApi: true,
-      scrollback: 5000,
+      scrollback: 8000,
+      // Prefer wrapping long lines when the TUI emits plain text
+      convertEol: false,
     });
 
     const fit = new FitAddon();
@@ -105,6 +185,7 @@ export default function TerminalPane({ active, focusNonce = 0 }: Props) {
 
     termRef.current = term;
     fitRef.current = fit;
+    lastDimsRef.current = { cols: term.cols, rows: term.rows };
 
     const onData = window.vefg.on("terminal:data", (payload) => {
       term.write(String(payload ?? ""));
@@ -128,11 +209,13 @@ export default function TerminalPane({ active, focusNonce = 0 }: Props) {
     });
 
     const start = async () => {
-      fit.fit();
+      fitAndSyncPty(true);
       const dims = { cols: term.cols, rows: term.rows };
       try {
         await window.vefg.terminalStart(dims);
         startedRef.current = true;
+        // Second fit after layout paints (titlebar / split settle)
+        requestAnimationFrame(() => fitAndSyncPty(true));
       } catch (err) {
         term.writeln(
           `\x1b[31mTerminal failed to start: ${err instanceof Error ? err.message : String(err)}\x1b[0m`,
@@ -144,19 +227,14 @@ export default function TerminalPane({ active, focusNonce = 0 }: Props) {
     void start();
 
     const ro = new ResizeObserver(() => {
-      try {
-        fit.fit();
-        if (startedRef.current) {
-          void window.vefg.terminalResize({ cols: term.cols, rows: term.rows });
-        }
-      } catch {
-        /* ignore */
-      }
+      // Debounce while dragging the splitter; still sync soon enough for live feel
+      scheduleFit(false, 40);
     });
     ro.observe(hostRef.current);
 
     return () => {
       clearFocusTimer();
+      clearResizeTimer();
       onData();
       onExit();
       onFocusReq();
@@ -169,17 +247,7 @@ export default function TerminalPane({ active, focusNonce = 0 }: Props) {
 
   useEffect(() => {
     if (!active) return;
-    requestAnimationFrame(() => {
-      try {
-        fitRef.current?.fit();
-        const term = termRef.current;
-        if (term && startedRef.current) {
-          void window.vefg.terminalResize({ cols: term.cols, rows: term.rows });
-        }
-      } catch {
-        /* ignore */
-      }
-    });
+    requestAnimationFrame(() => fitAndSyncPty(true));
   }, [active]);
 
   // Parent bumps focusNonce after Start Grok (not after every deliver — main owns that)
@@ -188,6 +256,19 @@ export default function TerminalPane({ active, focusNonce = 0 }: Props) {
     scheduleFocus();
     return () => clearFocusTimer();
   }, [focusNonce]);
+
+  // Splitter mouseup / keyboard resize / window layout settle
+  useEffect(() => {
+    if (!fitNonce) return;
+    // Double rAF: wait for CSS width to apply, then fit + SIGWINCH-equivalent
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        fitAndSyncPty(true);
+        // One more pass after fonts/layout settle (CJK mono fallback)
+        window.setTimeout(() => fitAndSyncPty(true), 80);
+      });
+    });
+  }, [fitNonce]);
 
   return (
     <div

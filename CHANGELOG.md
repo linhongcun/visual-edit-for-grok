@@ -2,6 +2,15 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.4.2] — 2026-07-11
+
+### Terminal width (wide TUI tables)
+
+- Default split favors a slightly wider terminal (`0.52`); min terminal width 400px
+- xterm font 12px + CJK-friendly mono stack; tighter line metrics for more columns
+- Debounced live resize; forced fit + PTY resize after splitter mouseup/keyboard
+- Less host padding so FitAddon can use more horizontal space
+
 ## [0.4.1] — 2026-07-11
 
 ### Internationalization

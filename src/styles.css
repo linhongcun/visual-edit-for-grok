@@ -918,19 +918,26 @@ code {
   flex: 1;
 }
 
+/* Full host so FitAddon measures all available columns for wide TUI tables */
 .terminal-host {
   flex: 1;
   min-height: 0;
-  padding: var(--space-2) var(--space-3) var(--space-3);
+  /* Less horizontal padding → more terminal columns for CJK tables */
+  padding: var(--space-2) var(--space-2) var(--space-2);
   overflow: hidden;
 }
 
 .terminal-host .xterm {
   height: 100%;
+  width: 100%;
 }
 
 .terminal-host .xterm-viewport {
   overflow-y: auto !important;
+}
+
+.terminal-host .xterm-screen {
+  width: 100%;
 }
 
 .splitter {

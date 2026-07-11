@@ -17,7 +17,8 @@ const DEFAULTS = {
   // produced a failure screen in installed builds unless the demo was started.
   previewUrl: "",
   projectCwd: "",
-  splitRatio: 0.46,
+  // Slightly wider terminal pane so Grok TUI tables get more columns by default
+  splitRatio: 0.52,
   /** UI language: "en" | "zh" (empty means detect on first run) */
   locale: "",
   recentPreviewUrls: [],

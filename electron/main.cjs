@@ -151,8 +151,9 @@ const isDev = process.env.VEFG_DEV === "1";
 // Keep in sync with src/styles.css --toolbar-height
 const TOOLBAR_HEIGHT = 96;
 const SPLITTER_WIDTH = 5;
-const MIN_TERMINAL_WIDTH = 320;
-const MIN_PREVIEW_WIDTH = 360;
+// Wider floor so Grok TUI tables keep more columns when the split is tight
+const MIN_TERMINAL_WIDTH = 400;
+const MIN_PREVIEW_WIDTH = 320;
 
 /** Packaged .app vs `electron .` / vite dev */
 function isPackagedApp() {
@@ -187,7 +188,7 @@ let lastScreenshotPath = null;
 /** @type {object | null} */
 let lastCaptureMeta = null;
 /** Left pane ratio 0–1 */
-let splitRatio = 0.46;
+let splitRatio = 0.52;
 /** @type {"en" | "zh"} */
 let uiLocale = "en";
 let projectCwd = defaultProjectCwd();

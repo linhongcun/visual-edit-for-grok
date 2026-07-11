@@ -36,8 +36,8 @@ import {
 } from "./i18n";
 
 const DEFAULT_PREVIEW_URL = "";
-const MIN_TERMINAL_WIDTH = 320;
-const MIN_PREVIEW_WIDTH = 360;
+const MIN_TERMINAL_WIDTH = 400;
+const MIN_PREVIEW_WIDTH = 320;
 const SPLITTER_WIDTH = 5;
 
 interface CaptureReceipt {
@@ -126,9 +126,15 @@ export default function App() {
   const [receipt, setReceipt] = useState<CaptureReceipt | null>(null);
   const [receiptThumbnail, setReceiptThumbnail] = useState<string | null>(null);
   const [termFocusNonce, setTermFocusNonce] = useState(0);
+  /** Bump after splitter settle so xterm re-fits and PTY gets new cols (wide tables). */
+  const [termFitNonce, setTermFitNonce] = useState(0);
   const [locale, setLocale] = useState<Locale>(() => detectBrowserLocale());
   const localeRef = useRef(locale);
   const dragging = useRef(false);
+
+  function requestTerminalFit() {
+    setTermFitNonce((n) => n + 1);
+  }
   const selectionRef = useRef<ElementSelection | null>(null);
   const screenshotPathRef = useRef<string | null>(null);
   const previewRef = useRef(preview);
@@ -687,10 +693,16 @@ export default function App() {
             if (force && bounds.terminalWidth) {
               setTerminalWidth(bounds.terminalWidth);
             }
+            // After layout flush, force xterm fit + PTY resize for Grok reflow
+            if (force) {
+              requestAnimationFrame(() => requestTerminalFit());
+            }
           })
           .catch(() => {
             // Keep the local split usable if the native view is closing.
           });
+      } else if (force) {
+        requestAnimationFrame(() => requestTerminalFit());
       }
       return next;
     },
@@ -1197,7 +1209,11 @@ export default function App() {
             <span className="pane-hint">{tr("pane.terminalHint")}</span>
           </div>
           <div className="terminal-body terminal-body-full">
-            <TerminalPane active focusNonce={termFocusNonce} />
+            <TerminalPane
+              active
+              focusNonce={termFocusNonce}
+              fitNonce={termFitNonce}
+            />
           </div>
         </section>
 
