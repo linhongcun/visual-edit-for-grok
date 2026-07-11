@@ -2,7 +2,7 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
-## [0.6.6] — 2026-07-11
+## [0.6.7] — 2026-07-11
 
 ### Restore CJK / markdown table border alignment
 

@@ -12,6 +12,21 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function stopChild(child) {
+  if (!child) return;
+  if (child.exitCode == null && child.signalCode == null) {
+    child.kill("SIGTERM");
+    await Promise.race([
+      new Promise((resolve) => child.once("exit", resolve)),
+      delay(2_000),
+    ]);
+  }
+  if (child.exitCode == null && child.signalCode == null) {
+    child.kill("SIGKILL");
+    await new Promise((resolve) => child.once("exit", resolve));
+  }
+}
+
 async function waitFor(check, message, timeoutMs = 12_000) {
   const deadline = Date.now() + timeoutMs;
   let lastError = null;
@@ -156,10 +171,11 @@ async function run() {
   const demoServer = http.createServer((request, response) => {
     response.setHeader("content-type", "text/html; charset=utf-8");
     if (request.url === "/second") {
-      response.end("<!doctype html><title>Second page</title><main id='second'>Second page</main>");
+      response.end("<!doctype html><meta name='viewport' content='width=device-width,initial-scale=1'><title>Second page</title><main id='second'>Second page</main>");
       return;
     }
     response.end(`<!doctype html>
+      <meta name="viewport" content="width=device-width,initial-scale=1">
       <title>Picker smoke page</title>
       <style>body{font:16px system-ui;margin:40px}#target{padding:20px;background:#2563eb;color:white;border:0;border-radius:10px}</style>
       <button id="target" data-token="must-redact" value="secret-value">Pick this target</button>`);
@@ -240,6 +256,12 @@ async function run() {
       aimDisabled: true,
       hasOnboarding: true,
     });
+    assert.ok(
+      (await shellClient.evaluate(
+        `document.querySelector('.url-input')?.getBoundingClientRect().width || 0`,
+      )) >= 140,
+      "preview URL input was squeezed by neighboring controls",
+    );
     const unsafeLinkResult = await shellClient.evaluate(`(async () => {
       try {
         await window.vefg.openExternal("file:///etc/passwd");
@@ -492,6 +514,32 @@ async function run() {
     );
     assert.strictEqual(verificationDelivery.copied, true);
 
+    await previewClient.evaluate(
+      `document.querySelector("#target")?.remove(); true`,
+    );
+    const missingTargetVerification = await shellClient.evaluate(
+      `(async () => window.vefg.verify())()`,
+    );
+    assert.strictEqual(
+      missingTargetVerification.verifyPair.comparison.targetFound,
+      false,
+    );
+    assert.strictEqual(
+      missingTargetVerification.verifyPair.after.captureMeta.captureMode,
+      "viewport",
+    );
+    assert.ok(
+      fs.existsSync(missingTargetVerification.verifyPair.after.screenshotPath),
+      "Verify missing-target After image missing",
+    );
+    await previewClient.evaluate(`(() => {
+      const target = document.createElement("button");
+      target.id = "target";
+      target.textContent = "Updated target";
+      document.body.appendChild(target);
+      return true;
+    })()`);
+
     assert.strictEqual(state.previewStatus.hasCurrentTarget, true);
     const phoneViewport = await shellClient.evaluate(
       `(async () => window.vefg.setViewport({presetId:"phone390",orientation:"portrait"}))()`,
@@ -588,6 +636,11 @@ async function run() {
       debuggingPort,
       (target) => target.type === "page" && target.url === secondUrl,
       "second preview target",
+    );
+    assert.strictEqual(
+      await previewClient.evaluate("window.innerWidth"),
+      390,
+      "responsive emulation was lost after navigation",
     );
     const viewportFrameMode = await shellClient.evaluate(
       `(async () => window.vefg.setFrameMode("viewport"))()`,
@@ -704,6 +757,47 @@ async function run() {
 
     previewClient.close();
     previewClient = null;
+    state = await shellClient.evaluate("window.vefg.getState()");
+    const firstSessionId = state.activeTerminalId;
+    const createdSession = await shellClient.evaluate(
+      `(async () => window.vefg.terminalCreate({cwd:${JSON.stringify(projectDir)},activate:true}))()`,
+    );
+    const secondSessionId = createdSession.sessionId;
+    assert.notStrictEqual(secondSessionId, firstSessionId);
+    await shellClient.evaluate(
+      `(async () => window.vefg.navigate(${JSON.stringify(demoUrl)}))()`,
+    );
+    await shellClient.evaluate(
+      `(async () => window.vefg.setViewport({presetId:"fit",orientation:"portrait"}))()`,
+    );
+    await waitFor(async () => {
+      const next = await shellClient.evaluate("window.vefg.getState()");
+      return next.activeTerminalId === secondSessionId &&
+        next.previewStatus.url === demoUrl &&
+        !next.previewStatus.loading ? next : null;
+    }, "second terminal workspace did not settle");
+    await shellClient.evaluate(
+      `(async () => window.vefg.terminalSetActive(${JSON.stringify(firstSessionId)}))()`,
+    );
+    state = await waitFor(async () => {
+      const next = await shellClient.evaluate("window.vefg.getState()");
+      return next.activeTerminalId === firstSessionId &&
+        next.previewStatus.url === secondUrl &&
+        !next.previewStatus.loading ? next : null;
+    }, "first terminal workspace was not restored");
+    assert.strictEqual(state.viewportPreset, "phone390");
+    const firstWorkspacePreview = await connectTarget(
+      debuggingPort,
+      (target) => target.type === "page" && target.url === secondUrl,
+      "restored first workspace preview target",
+    );
+    assert.strictEqual(
+      await firstWorkspacePreview.evaluate("window.innerWidth"),
+      390,
+      "first terminal responsive viewport was not restored",
+    );
+    firstWorkspacePreview.close();
+
     const historyBeforePrivate = state.recentPreviewUrls;
     const privateStatus = await shellClient.evaluate(
       `(async () => window.vefg.setPrivateMode(true))()`,
@@ -713,7 +807,7 @@ async function run() {
       const next = await shellClient.evaluate("window.vefg.getState()");
       return next.privateMode && !next.previewStatus.loading ? next : null;
     }, "private preview did not settle");
-    const privateUrl = `${demoUrl}private?token=do-not-persist`;
+    const privateUrl = `${demoUrl}private-a?token=do-not-persist`;
     await shellClient.evaluate(
       `(async () => window.vefg.navigate(${JSON.stringify(privateUrl)}))()`,
     );
@@ -723,10 +817,41 @@ async function run() {
         !next.previewStatus.loading ? next : null;
     }, "private preview navigation did not settle");
     assert.deepStrictEqual(state.recentPreviewUrls, historyBeforePrivate);
+    await shellClient.evaluate(
+      `(async () => window.vefg.terminalSetActive(${JSON.stringify(secondSessionId)}))()`,
+    );
+    await waitFor(async () => {
+      const next = await shellClient.evaluate("window.vefg.getState()");
+      return next.activeTerminalId === secondSessionId &&
+        next.previewStatus.url === demoUrl &&
+        !next.previewStatus.loading ? next : null;
+    }, "private second terminal did not start from its persistent page");
+    const secondPrivateUrl = `${demoUrl}private-b?token=do-not-persist`;
+    await shellClient.evaluate(
+      `(async () => window.vefg.navigate(${JSON.stringify(secondPrivateUrl)}))()`,
+    );
+    await waitFor(async () => {
+      const next = await shellClient.evaluate("window.vefg.getState()");
+      return next.previewStatus.url === secondPrivateUrl &&
+        !next.previewStatus.loading ? next : null;
+    }, "private second terminal navigation did not settle");
+    await shellClient.evaluate(
+      `(async () => window.vefg.terminalSetActive(${JSON.stringify(firstSessionId)}))()`,
+    );
+    await waitFor(async () => {
+      const next = await shellClient.evaluate("window.vefg.getState()");
+      return next.previewStatus.url === privateUrl &&
+        !next.previewStatus.loading ? next : null;
+    }, "private first terminal URL was not isolated");
     const clearedPreview = await shellClient.evaluate(
       `(async () => window.vefg.clearPreviewData("all"))()`,
     );
     assert.strictEqual(clearedPreview.ok, true);
+    await waitFor(async () => {
+      const next = await shellClient.evaluate("window.vefg.getState()");
+      return next.previewStatus.url === privateUrl &&
+        !next.previewStatus.loading ? next : null;
+    }, "private preview did not recover after clearing data");
     const diagnostics = await shellClient.evaluate(
       `(async () => window.vefg.copyDiagnostics())()`,
     );
@@ -740,9 +865,125 @@ async function run() {
       return next.previewStatus.url === secondUrl &&
         !next.previewStatus.loading ? next : null;
     }, "private mode did not restore the last persistent page");
+    await shellClient.evaluate(
+      `(async () => window.vefg.terminalSetActive(${JSON.stringify(secondSessionId)}))()`,
+    );
+    await waitFor(async () => {
+      const next = await shellClient.evaluate("window.vefg.getState()");
+      return next.activeTerminalId === secondSessionId &&
+        next.previewStatus.url === demoUrl &&
+        !next.previewStatus.loading ? next : null;
+    }, "private mode overwrote the second terminal persistent page");
+    const secondWorkspacePreview = await connectTarget(
+      debuggingPort,
+      (target) => target.type === "page" && target.url === demoUrl,
+      "restored second workspace preview target",
+    );
+    assert.ok(
+      (await secondWorkspacePreview.evaluate("window.innerWidth")) > 390,
+      "second terminal Fit viewport inherited the first terminal phone width",
+    );
+    secondWorkspacePreview.close();
+    const settingsPath = path.join(
+      tmp,
+      "profile",
+      "visual-capture-settings.json",
+    );
+    const persistedSettings = await waitFor(() => {
+      if (!fs.existsSync(settingsPath)) return null;
+      const parsed = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+      return parsed.activeTerminalId === secondSessionId ? parsed : null;
+    }, "active terminal workspace was not persisted");
+    const persistedFirst = persistedSettings.terminalSessions.find(
+      (item) => item.id === firstSessionId,
+    );
+    const persistedSecond = persistedSettings.terminalSessions.find(
+      (item) => item.id === secondSessionId,
+    );
+    assert.strictEqual(persistedFirst.previewUrl, secondUrl);
+    assert.strictEqual(persistedSecond.previewUrl, demoUrl);
+    assert.doesNotMatch(JSON.stringify(persistedSettings), /do-not-persist/);
+
+    const restoreProfile = path.join(tmp, "restore-profile");
+    fs.mkdirSync(restoreProfile, { recursive: true });
+    const restoreSettingsPath = path.join(
+      restoreProfile,
+      "visual-capture-settings.json",
+    );
+    fs.writeFileSync(
+      restoreSettingsPath,
+      JSON.stringify({
+        settingsVersion: 2,
+        previewUrl: demoUrl,
+        projectCwd: projectDir,
+        terminalSessions: [
+          { id: "restore-a", cwd: projectDir, label: "A", createdAt: 1 },
+          { id: "restore-b", cwd: projectDir, label: "B", createdAt: 2 },
+        ],
+        activeTerminalId: "restore-b",
+      }),
+      { mode: 0o600 },
+    );
+    const restoreDebugPort = await freePort();
+    const restoreArgs = [
+      `--remote-debugging-port=${restoreDebugPort}`,
+      `--user-data-dir=${restoreProfile}`,
+      "--lang=en-US",
+    ];
+    if (packagedBinary) restoreArgs.push("--disable-gpu");
+    else restoreArgs.push(ROOT);
+    const restoreChild = spawn(electronBinary, restoreArgs, {
+      cwd: ROOT,
+      env: {
+        ...process.env,
+        GROK_PATH: FAKE_GROK,
+        HOME: tmp,
+        LANG: "en_US.UTF-8",
+        NODE_OPTIONS: "",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let restoreLog = "";
+    restoreChild.stdout.on("data", (chunk) => (restoreLog += chunk));
+    restoreChild.stderr.on("data", (chunk) => (restoreLog += chunk));
+    let restoreClient = null;
+    try {
+      restoreClient = await connectTarget(
+        restoreDebugPort,
+        (target) =>
+          target.type === "page" && target.title === "Visual Capture for Grok",
+        "restored app shell target",
+      );
+      const restoredState = await waitFor(
+        () =>
+          restoreClient.evaluate(
+            `(async () => window.vefg ? window.vefg.getState() : null)()`,
+          ),
+        "restored preload API did not become available",
+      );
+      assert.strictEqual(restoredState.activeTerminalId, "restore-b");
+      assert.strictEqual(restoredState.terminals.activeId, "restore-b");
+      assert.strictEqual(restoredState.previewUrl, demoUrl);
+      const rewrittenRestoreSettings = JSON.parse(
+        fs.readFileSync(restoreSettingsPath, "utf8"),
+      );
+      assert.strictEqual(rewrittenRestoreSettings.activeTerminalId, "restore-b");
+      assert.strictEqual(
+        rewrittenRestoreSettings.terminalSessions.find(
+          (item) => item.id === "restore-b",
+        ).previewUrl,
+        demoUrl,
+      );
+    } catch (error) {
+      error.message += `\nRestore Electron log:\n${restoreLog.slice(-3_000)}`;
+      throw error;
+    } finally {
+      restoreClient?.close();
+      await stopChild(restoreChild);
+    }
 
     console.log(
-      `ok  - ${packagedBinary ? "Packaged" : "Electron"} secure picker / navigation / recovery / splitter / cwd / Grok / shortcut smoke`,
+      `ok  - ${packagedBinary ? "Packaged" : "Electron"} Aim / Verify / responsive / private workspaces / restore / Grok smoke`,
     );
   } catch (err) {
     err.message += `\nElectron log:\n${appLog.slice(-6_000)}`;
@@ -750,17 +991,7 @@ async function run() {
   } finally {
     shellClient?.close();
     previewClient?.close();
-    if (child.exitCode == null && child.signalCode == null) {
-      child.kill("SIGTERM");
-      await Promise.race([
-        new Promise((resolve) => child.once("exit", resolve)),
-        delay(2_000),
-      ]);
-    }
-    if (child.exitCode == null && child.signalCode == null) {
-      child.kill("SIGKILL");
-      await new Promise((resolve) => child.once("exit", resolve));
-    }
+    await stopChild(child);
     await new Promise((resolve) => demoServer.close(resolve));
     fs.rmSync(tmp, { recursive: true, force: true });
   }

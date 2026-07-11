@@ -1308,7 +1308,8 @@ code {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  /* BrowserView is native; only chrome needs pointer events */
+  container: preview-pane / inline-size;
+  /* WebContentsView is native; only chrome needs pointer events */
   pointer-events: none;
 }
 
@@ -1346,6 +1347,29 @@ code {
   border-left: 1px solid color-mix(in srgb, var(--color-border) 40%, transparent);
   padding-left: 6px;
   flex-shrink: 0;
+}
+
+/* Keep the URL useful at the normal split while retaining every action. */
+@container preview-pane (max-width: 900px) {
+  .preview-pane-actions .action-label {
+    display: none;
+  }
+
+  .preview-pane-actions .btn-compact {
+    min-width: 28px;
+    padding-inline: 7px;
+    gap: 0;
+  }
+
+  .preview-pane-actions .btn-pick {
+    min-width: 28px;
+  }
+}
+
+@container preview-pane (max-width: 700px) {
+  .preview-chrome-label {
+    display: none;
+  }
 }
 
 .preview-collapse-btn {

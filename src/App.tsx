@@ -43,7 +43,7 @@ import {
 
 const DEFAULT_PREVIEW_URL = "";
 const MIN_TERMINAL_WIDTH = 400;
-const MIN_PREVIEW_WIDTH = 320;
+const MIN_PREVIEW_WIDTH = 600;
 const SPLITTER_WIDTH = 5;
 const DEFAULT_VIEWPORT_PRESETS: ViewportPreset[] = [
   { id: "fit", label: "Fit", width: null, height: null, mobile: false },
@@ -1505,7 +1505,9 @@ export default function App() {
         aria-busy={captureBusy}
       >
         <IconCrosshair />
-        {pickMode ? tr("actions.aiming") : tr("actions.aim")}
+        <span className="action-label">
+          {pickMode ? tr("actions.aiming") : tr("actions.aim")}
+        </span>
       </button>
       <div className="frame-control compact">
         <select
@@ -1548,7 +1550,9 @@ export default function App() {
           aria-busy={captureBusy}
         >
           <IconCamera />
-          {captureBusy ? "…" : tr("actions.frame")}
+          <span className="action-label">
+            {captureBusy ? "…" : tr("actions.frame")}
+          </span>
         </button>
       </div>
       <button
@@ -1567,7 +1571,7 @@ export default function App() {
         aria-busy={captureBusy}
       >
         <IconSend />
-        {tr("actions.resend")}
+        <span className="action-label">{tr("actions.resend")}</span>
       </button>
     </div>
   );

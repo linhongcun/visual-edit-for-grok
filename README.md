@@ -1,6 +1,6 @@
 # Visual Capture for Grok
 
-**Version 0.6.0** · macOS (Apple Silicon)
+**Version 0.6.7** · macOS (Apple Silicon)
 
 Side-by-side workbench: **left = native Grok Build TUI**, **right = website preview**.  
 **Aim** or **Frame** a UI → the app attempts an image paste + grounded DOM-context write in Grok’s PTY. If Grok is not running, text + image stay on the clipboard.
@@ -28,7 +28,7 @@ image chip. Verify the prompt before submitting.
 |----------|----------|
 | **Installed app** | `/Applications/Visual Capture for Grok.app` |
 | **Built `.app`** | `release/mac-arm64/Visual Capture for Grok.app` |
-| **DMG** | `release/Visual-Capture-for-Grok-0.6.0-arm64.dmg` |
+| **DMG** | `release/Visual-Capture-for-Grok-0.6.7-arm64.dmg` |
 
 Download the current installer from [GitHub Releases](https://github.com/linhongcun/visual-edit-for-grok/releases).
 
@@ -107,7 +107,7 @@ While a capture is in flight, Aim / Frame / Re-send are disabled (**single-fligh
 
 | Area | Behavior |
 |------|----------|
-| Embedded terminal | `node-pty` + xterm.js; colorful `TERM` / truecolor env |
+| Embedded terminal | `node-pty` + xterm.js; Unicode 11/WebGL table rendering and velocity-aware trackpad scrolling |
 | Multimodal deliver | Screenshot → OS clipboard (file on macOS) → Ctrl+V attempt + bracketed text paste; receipt remains unconfirmed |
 | DOM context | Cursor-style `browser_element` plus viewport/scroll/key styles, with sensitive attributes redacted |
 | Context integrity | Selection is navigation-scoped and rechecked after capture; changed DOM/geometry is discarded instead of pairing stale context with pixels |
@@ -188,6 +188,7 @@ visual-edit-for-grok/
 │   └── runtime-policy.cjs    # Busy / cleanup / debounce / pick-commit (pure)
 ├── src/                      # Renderer (React + Vite + TypeScript)
 │   ├── App.tsx               # Toolbar, status strip, splitter
+│   ├── trackpad-scroll.cjs   # Pure velocity/frame wheel gain policy
 │   └── components/
 │       ├── TerminalPane.tsx  # xterm host + focus handoff
 │       └── Icons.tsx
@@ -244,6 +245,7 @@ profile and fake Grok executable.
 | `test/deliver-helpers.test.cjs` | Payload + paste status + cleanup demo |
 | `test/runtime-policy.test.cjs` | Single-flight, throttle, debounce, pick-commit |
 | `test/terminal.test.cjs` | Shell quoting and truecolor environment policy |
+| `test/trackpad-scroll.test.cjs` | Slow glide, fast flick, direction and delta modes |
 | `test/electron-smoke.test.cjs` | Secure Aim, Verify, responsive viewport, privacy mode, stale navigation, cwd, Grok and shortcuts |
 
 ---
