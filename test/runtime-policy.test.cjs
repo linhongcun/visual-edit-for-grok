@@ -5,6 +5,8 @@
 const assert = require("assert");
 const {
   canStartCapture,
+  mayStartCaptureAction,
+  classifyGrokUiState,
   validateAimEvent,
   normalizeViewport,
   stampSelectionContext,
@@ -535,10 +537,66 @@ function testBusyRejectThenFailureNeverPairsNewDomWithOldShot() {
   assert.ok(failed.lastSelection && failed.lastScreenshotPath);
 }
 
+function testMayStartCaptureActionBusy() {
+  assert.deepStrictEqual(mayStartCaptureAction({ busy: true }), {
+    ok: false,
+    reason: "busy",
+  });
+  assert.deepStrictEqual(mayStartCaptureAction({ inFlight: true }), {
+    ok: false,
+    reason: "busy",
+  });
+  assert.deepStrictEqual(mayStartCaptureAction({ busy: false }), {
+    ok: true,
+    reason: null,
+  });
+}
+
+function testMayStartCaptureActionResendNeedsCapture() {
+  assert.deepStrictEqual(
+    mayStartCaptureAction({ action: "resend", hasCapture: false }),
+    { ok: false, reason: "no-capture" },
+  );
+  assert.deepStrictEqual(
+    mayStartCaptureAction({ action: "resend", hasCapture: true }),
+    { ok: true, reason: null },
+  );
+}
+
+function testClassifyGrokUiStateNeverPromotesRequestedToReady() {
+  assert.strictEqual(
+    classifyGrokUiState({
+      shellAlive: true,
+      grokLaunchRequested: true,
+      grokState: "running",
+    }),
+    "launch-requested",
+  );
+  assert.strictEqual(
+    classifyGrokUiState({
+      shellAlive: true,
+      grokReady: true,
+      grokState: "running",
+    }),
+    "ready",
+  );
+  assert.strictEqual(
+    classifyGrokUiState({ shellAlive: false, current: "launch-requested" }),
+    "exited",
+  );
+  assert.strictEqual(
+    classifyGrokUiState({ shellAlive: false, current: "idle" }),
+    "idle",
+  );
+}
+
 function run() {
   const tests = [
     testCanStartWhenIdle,
     testRejectWhenBusy,
+    testMayStartCaptureActionBusy,
+    testMayStartCaptureActionResendNeedsCapture,
+    testClassifyGrokUiStateNeverPromotesRequestedToReady,
     testAimEventRequiresActivePickMode,
     testAimEventRequiresIdleCapture,
     testAimEventAcceptsCurrentTrustedDocument,

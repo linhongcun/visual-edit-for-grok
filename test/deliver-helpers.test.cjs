@@ -10,6 +10,8 @@ const { cleanupCaptureDir } = require("../electron/capture-cleanup.cjs");
 const {
   buildPasteStatus,
   buildDeliveryStatus,
+  classifyDeliveryOutcome,
+  deliveryOutcomeLabel,
 } = require("../electron/delivery-status.cjs");
 
 function testPayloadHasElementAndShotMultimodalHint() {
@@ -165,6 +167,70 @@ function testLegacyTerminalAliveMeansReceivingGrokPty() {
   assert.strictEqual(r.pasted, true);
 }
 
+function testClassifyImageAttemptedNeverConfirmed() {
+  const r = classifyDeliveryOutcome({
+    imageChipAttempted: true,
+    textPasted: true,
+    pastedToTerminal: true,
+    imageChipConfirmed: true, // hostile input — classifier must ignore
+  });
+  assert.strictEqual(r.kind, "image-attempted");
+  assert.strictEqual(r.confirmedChip, false);
+  const label = deliveryOutcomeLabel(r.kind, "en");
+  assert.ok(/attempted|unconfirmed/i.test(label));
+  assert.ok(!/\bconfirmed chip\b/i.test(label));
+}
+
+function testClassifyTextAttempted() {
+  const r = classifyDeliveryOutcome({
+    pastedToTerminal: true,
+    textPasted: true,
+    imageChipAttempted: false,
+  });
+  assert.strictEqual(r.kind, "text-attempted");
+  assert.strictEqual(r.confirmedChip, false);
+}
+
+function testClassifyClipboardOnlyWhenGrokOff() {
+  const r = classifyDeliveryOutcome({
+    copied: true,
+    pastedToTerminal: false,
+    imageChipAttempted: false,
+    fallback: "clipboard-only",
+  });
+  assert.strictEqual(r.kind, "clipboard-only");
+}
+
+function testClassifyLocalOnly() {
+  const r = classifyDeliveryOutcome({
+    hasImage: true,
+    screenshotPath: "/tmp/a.png",
+    copied: false,
+    pastedToTerminal: false,
+  });
+  assert.strictEqual(r.kind, "local-only");
+}
+
+function testClassifyFailed() {
+  const r = classifyDeliveryOutcome({ kind: "error", message: "boom" });
+  assert.strictEqual(r.kind, "failed");
+}
+
+function testBuildPasteStatusIncludesOutcomeKind() {
+  const r = buildPasteStatus({
+    terminalAlive: true,
+    grokRunning: true,
+    textPasted: true,
+    imagePrepared: true,
+    imageChipAttempted: true,
+  });
+  assert.strictEqual(r.deliveryOutcome, "image-attempted");
+  assert.strictEqual(r.deliveryConfirmed, false);
+  assert.strictEqual(r.imageChipConfirmed, false);
+  assert.ok(r.deliveryOutcomeLabel);
+  assert.ok(!/chip confirmed|confirmed chip/i.test(r.deliveryOutcomeLabel));
+}
+
 function testCleanupAfterCaptureCap() {
   const dir = path.join(os.tmpdir(), `vefg-clean-demo-${Date.now()}`);
   fs.mkdirSync(dir, { recursive: true });
@@ -195,6 +261,12 @@ function run() {
     testFailedWriteStillRecordsAttemptWithoutConfirmation,
     testLiveShellWithoutGrokUsesClipboardOnly,
     testLegacyTerminalAliveMeansReceivingGrokPty,
+    testClassifyImageAttemptedNeverConfirmed,
+    testClassifyTextAttempted,
+    testClassifyClipboardOnlyWhenGrokOff,
+    testClassifyLocalOnly,
+    testClassifyFailed,
+    testBuildPasteStatusIncludesOutcomeKind,
     testCleanupAfterCaptureCap,
   ];
   let failed = 0;

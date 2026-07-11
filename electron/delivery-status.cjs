@@ -1,8 +1,135 @@
 /**
- * Pure status messages for capture → Grok delivery outcomes.
- * Used by main process and unit tests.
+ * Pure status messages + delivery outcome classification for capture → Grok.
+ * Used by main process and unit tests. Never claims a Grok image chip was confirmed.
  */
 const { t, normalizeLocale } = require("../i18n/index.cjs");
+
+/** @typedef {"image-attempted"|"text-attempted"|"clipboard-only"|"local-only"|"failed"|"unknown"} DeliveryOutcomeKind */
+
+/**
+ * Stable outcome kinds for receipt/UI (short labels). Does not claim chip confirmation.
+ *
+ * @param {{
+ *   kind?: string,
+ *   message?: string,
+ *   error?: boolean,
+ *   terminalAlive?: boolean,
+ *   shellAlive?: boolean,
+ *   grokRunning?: boolean,
+ *   textPasteAttempted?: boolean,
+ *   textPasted?: boolean,
+ *   pastedToTerminal?: boolean,
+ *   imagePrepared?: boolean,
+ *   imageChipAttempted?: boolean,
+ *   imageChip?: boolean,
+ *   imageChipConfirmed?: boolean,
+ *   deliveryAttempted?: boolean,
+ *   deliveryConfirmed?: boolean,
+ *   copied?: boolean,
+ *   fallback?: string | null,
+ *   hasImage?: boolean,
+ * }} input
+ * @returns {{
+ *   kind: DeliveryOutcomeKind,
+ *   confirmedChip: false,
+ *   labelKey: string,
+ * }}
+ */
+function classifyDeliveryOutcome(input = {}) {
+  // Explicit honesty: never surface confirmedChip as true from this classifier.
+  const confirmedChip = false;
+
+  if (input.kind === "error" || input.error === true) {
+    return {
+      kind: "failed",
+      confirmedChip,
+      labelKey: "delivery.kind.failed",
+    };
+  }
+
+  const imageChipAttempted = Boolean(
+    input.imageChipAttempted ||
+      // Legacy: some paths set imageChip when a paste write was attempted
+      (input.imageChip &&
+        (input.pastedToTerminal ||
+          input.deliveryAttempted ||
+          input.textPasted)),
+  );
+
+  if (imageChipAttempted) {
+    return {
+      kind: "image-attempted",
+      confirmedChip,
+      labelKey: "delivery.kind.imageAttempted",
+    };
+  }
+
+  const textAttempted = Boolean(
+    input.deliveryAttempted ||
+      input.pastedToTerminal ||
+      input.textPasted ||
+      input.textPasteAttempted,
+  );
+
+  if (textAttempted) {
+    return {
+      kind: "text-attempted",
+      confirmedChip,
+      labelKey: "delivery.kind.textAttempted",
+    };
+  }
+
+  if (
+    input.fallback === "clipboard-only" ||
+    input.fallback === "manual-image-paste" ||
+    input.copied === true
+  ) {
+    return {
+      kind: "clipboard-only",
+      confirmedChip,
+      labelKey: "delivery.kind.clipboardOnly",
+    };
+  }
+
+  // Screenshot on disk (or prepared) without paste/clipboard sink
+  if (input.hasImage || input.imagePrepared || input.screenshotPath) {
+    return {
+      kind: "local-only",
+      confirmedChip,
+      labelKey: "delivery.kind.localOnly",
+    };
+  }
+
+  return {
+    kind: "unknown",
+    confirmedChip,
+    labelKey: "delivery.kind.unknown",
+  };
+}
+
+/**
+ * Short localized label for a classified outcome (never “chip confirmed”).
+ * @param {DeliveryOutcomeKind | string} kind
+ * @param {string} [locale]
+ */
+function deliveryOutcomeLabel(kind, locale = "en") {
+  const loc = normalizeLocale(locale);
+  const keyMap = {
+    "image-attempted": "delivery.kind.imageAttempted",
+    "text-attempted": "delivery.kind.textAttempted",
+    "clipboard-only": "delivery.kind.clipboardOnly",
+    "local-only": "delivery.kind.localOnly",
+    failed: "delivery.kind.failed",
+    unknown: "delivery.kind.unknown",
+  };
+  const key = keyMap[kind] || "delivery.kind.unknown";
+  const label = t(loc, key);
+  // Safety net: never allow marketing language about confirmed chips
+  if (/\bconfirmed\b/i.test(label) && /chip/i.test(label)) {
+    return t(loc, "delivery.kind.imageAttempted");
+  }
+  return label;
+}
 
 /**
  * @param {{
@@ -15,6 +142,7 @@ const { t, normalizeLocale } = require("../i18n/index.cjs");
  *   imagePrepared: boolean,
  *   imageChipAttempted: boolean,
  *   locale?: string,
+ *   copied?: boolean,
  * }} input
  * @returns {{
  *   pasted: boolean,
@@ -29,6 +157,8 @@ const { t, normalizeLocale } = require("../i18n/index.cjs");
  *   grokReady: null | false,
  *   deliveryAttempted: boolean,
  *   deliveryConfirmed: false,
+ *   deliveryOutcome: DeliveryOutcomeKind,
+ *   deliveryOutcomeLabel: string,
  *   fallback: string | null,
  *   statusMessage: string,
  * }}
@@ -77,6 +207,15 @@ function buildPasteStatus(input = {}) {
   };
 
   if (!grokRunning) {
+    const outcome = classifyDeliveryOutcome({
+      ...common,
+      copied: true,
+      fallback: "clipboard-only",
+      textPasteAttempted: false,
+      textPasted: false,
+      pastedToTerminal: false,
+      imageChipAttempted: false,
+    });
     return {
       ...common,
       pasted: false,
@@ -84,6 +223,8 @@ function buildPasteStatus(input = {}) {
       statusMessage: shellAlive
         ? t(locale, "main.shellNoGrok")
         : t(locale, "main.termOff"),
+      deliveryOutcome: outcome.kind,
+      deliveryOutcomeLabel: deliveryOutcomeLabel(outcome.kind, locale),
     };
   }
 
@@ -107,14 +248,32 @@ function buildPasteStatus(input = {}) {
     fallback = "clipboard-only";
   }
 
+  const outcome = classifyDeliveryOutcome({
+    ...common,
+    pastedToTerminal: pasted,
+    textPasted,
+    textPasteAttempted,
+    imageChipAttempted,
+    imagePrepared,
+    fallback,
+    copied: Boolean(fallback) || pasted,
+  });
+
   return {
     ...common,
     pasted,
     fallback,
     statusMessage,
+    deliveryOutcome: outcome.kind,
+    deliveryOutcomeLabel: deliveryOutcomeLabel(outcome.kind, locale),
   };
 }
 
 const buildDeliveryStatus = buildPasteStatus;
 
-module.exports = { buildPasteStatus, buildDeliveryStatus };
+module.exports = {
+  buildPasteStatus,
+  buildDeliveryStatus,
+  classifyDeliveryOutcome,
+  deliveryOutcomeLabel,
+};

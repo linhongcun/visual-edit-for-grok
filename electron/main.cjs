@@ -23,7 +23,11 @@ const {
   defaultSettingsPath,
 } = require("./settings-store.cjs");
 const { cleanupCaptureDir } = require("./capture-cleanup.cjs");
-const { buildPasteStatus } = require("./delivery-status.cjs");
+const {
+  buildPasteStatus,
+  classifyDeliveryOutcome,
+  deliveryOutcomeLabel,
+} = require("./delivery-status.cjs");
 const { t, normalizeLocale, detectLocale } = require("../i18n/index.cjs");
 const {
   canStartCapture,
@@ -1306,9 +1310,26 @@ async function deliverCapture(
   // Housekeeping off critical path (throttled)
   scheduleCaptureCleanup();
 
+  const copied = writeClipboard || pastedToTerminal || Boolean(fallback);
+  const outcome = classifyDeliveryOutcome({
+    kind,
+    ...deliveryDetails,
+    copied,
+    pastedToTerminal,
+    hasImage,
+    imagePrepared,
+    imageChip,
+    imageChipAttempted:
+      deliveryDetails.imageChipAttempted ?? Boolean(imageChip),
+    deliveryAttempted:
+      deliveryDetails.deliveryAttempted ?? Boolean(pastedToTerminal),
+    fallback,
+    screenshotPath: screenshotPath || null,
+  });
+
   return {
     ...deliveryDetails,
-    copied: writeClipboard || pastedToTerminal || Boolean(fallback),
+    copied,
     pastedToTerminal,
     hasImage,
     imagePrepared,
@@ -1323,6 +1344,8 @@ async function deliverCapture(
     text,
     screenshotPath: screenshotPath || null,
     kind,
+    deliveryOutcome: outcome.kind,
+    deliveryOutcomeLabel: deliveryOutcomeLabel(outcome.kind, uiLocale),
   };
 }
 

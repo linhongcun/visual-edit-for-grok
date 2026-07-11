@@ -19,7 +19,7 @@ const DEFAULT_SETTINGS_DEBOUNCE_MS = 250;
  * @returns {{ ok: boolean, reason: string | null, statusMessage: string | null }}
  */
 function canStartCapture(state = {}) {
-  if (state.inFlight) {
+  if (state.inFlight || state.busy) {
     return {
       ok: false,
       reason: "busy",
@@ -27,6 +27,73 @@ function canStartCapture(state = {}) {
     };
   }
   return { ok: true, reason: null, statusMessage: null };
+}
+
+/**
+ * Whether UI/keyboard may start Aim toggle, Frame, or Re-send.
+ * Same busy single-flight policy as toolbar buttons.
+ *
+ * @param {{ busy?: boolean, inFlight?: boolean, hasCapture?: boolean, action?: "aim"|"frame"|"resend"|"any" }} state
+ * @returns {{ ok: boolean, reason: string | null }}
+ */
+function mayStartCaptureAction(state = {}) {
+  if (state.busy || state.inFlight) {
+    return { ok: false, reason: "busy" };
+  }
+  const action = state.action || "any";
+  if (action === "resend" && state.hasCapture === false) {
+    return { ok: false, reason: "no-capture" };
+  }
+  return { ok: true, reason: null };
+}
+
+/**
+ * Map shell + Grok runtime fields to an honest UI grok state.
+ * Never promotes launch-requested / running-process alone to "ready".
+ *
+ * @param {{
+ *   shellAlive?: boolean,
+ *   terminalAlive?: boolean,
+ *   alive?: boolean,
+ *   grokReady?: boolean | null,
+ *   grokReadiness?: string,
+ *   grokLaunchRequested?: boolean,
+ *   grokRunning?: boolean,
+ *   grokState?: string,
+ *   current?: string,
+ * }} input
+ * @returns {"idle"|"launching"|"launch-requested"|"ready"|"exited"|"unknown"}
+ */
+function classifyGrokUiState(input = {}) {
+  const shellAlive = Boolean(
+    input.shellAlive ?? input.terminalAlive ?? input.alive,
+  );
+  const raw = String(input.grokState || "").toLowerCase();
+
+  if (
+    input.grokReady === true ||
+    input.grokReadiness === "ready" ||
+    raw === "ready"
+  ) {
+    return "ready";
+  }
+  if (raw === "launching") return "launching";
+  if (
+    input.grokLaunchRequested === true ||
+    input.grokRunning === true ||
+    raw === "launch-requested" ||
+    raw === "requested" ||
+    raw === "running"
+  ) {
+    // Process may be up; readiness still unconfirmed unless grokReady above.
+    return "launch-requested";
+  }
+  if (raw === "exited" || raw === "stopped") return "exited";
+  if (raw === "idle" || raw === "not-started") return "idle";
+  if (!shellAlive) {
+    return input.current === "idle" || !input.current ? "idle" : "exited";
+  }
+  return "unknown";
 }
 
 function firstDefined(...values) {
@@ -765,6 +832,8 @@ module.exports = {
   DEFAULT_CLEANUP_MIN_INTERVAL_MS,
   DEFAULT_SETTINGS_DEBOUNCE_MS,
   canStartCapture,
+  mayStartCaptureAction,
+  classifyGrokUiState,
   validateAimEvent,
   normalizeViewport,
   stampSelectionContext,

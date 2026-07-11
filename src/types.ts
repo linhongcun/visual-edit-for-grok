@@ -115,6 +115,16 @@ export interface CaptureResult {
   pageUrl?: string;
   pageTitle?: string;
   deliveryStatus?: string;
+  /** Stable outcome kind from classifyDeliveryOutcome (never chip-confirmed). */
+  deliveryOutcome?:
+    | "image-attempted"
+    | "text-attempted"
+    | "clipboard-only"
+    | "local-only"
+    | "failed"
+    | "unknown"
+    | string;
+  deliveryOutcomeLabel?: string;
   deliveryAttempted?: boolean;
   deliveryConfirmed?: boolean;
   shellAlive?: boolean;

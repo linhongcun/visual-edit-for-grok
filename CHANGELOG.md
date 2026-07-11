@@ -2,6 +2,17 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.4.5] — 2026-07-11
+
+### Next-round polish (list → execute)
+
+See also [docs/NEXT-POLISH.md](./docs/NEXT-POLISH.md).
+
+1. **Structured delivery outcomes** — `classifyDeliveryOutcome` kinds (`image-attempted`, `text-attempted`, `clipboard-only`, `local-only`, `failed`) with short EN/中文 labels; receipt uses kinds; never claims confirmed image chip.
+2. **Keyboard single-flight** — ⌘⇧A / ⌘⇧F / ⌘⇧V (and Ctrl) respect the same busy guard as toolbar buttons (`captureBusyRef` + toast).
+3. **Shell vs Grok honesty** — status pills say shell on/off separately from Grok state; `classifyGrokUiState` / UI never promote launch-requested or process-running alone to “ready”.
+4. **Tests** — pure helpers covered in `test/deliver-helpers.test.cjs` and `test/runtime-policy.test.cjs`.
+
 ## [0.4.4] — 2026-07-11
 
 ### Terminal size / table rendering (continued)

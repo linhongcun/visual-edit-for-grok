@@ -66,20 +66,34 @@ function selectionLabelFor(selection: ElementSelection | null): string | null {
   }`;
 }
 
+const DELIVERY_KIND_KEYS: Record<string, string> = {
+  "image-attempted": "delivery.kind.imageAttempted",
+  "text-attempted": "delivery.kind.textAttempted",
+  "clipboard-only": "delivery.kind.clipboardOnly",
+  "local-only": "delivery.kind.localOnly",
+  failed: "delivery.kind.failed",
+  unknown: "delivery.kind.unknown",
+};
+
+/** Prefer structured outcome from main; never implies a confirmed image chip. */
 function deliverySummary(result: CaptureResult, locale: Locale): string {
+  if (result.deliveryOutcomeLabel) return result.deliveryOutcomeLabel;
+  const kind = result.deliveryOutcome;
+  if (kind && DELIVERY_KIND_KEYS[kind]) {
+    return t(locale, DELIVERY_KIND_KEYS[kind]);
+  }
+  if (result.kind === "error") return t(locale, "delivery.kind.failed");
   if (
     result.imageChipAttempted ||
     (result.pastedToTerminal && result.imageChip)
   ) {
-    return t(locale, "delivery.imageDom");
+    return t(locale, "delivery.kind.imageAttempted");
   }
   if (result.deliveryAttempted || result.pastedToTerminal) {
-    return t(locale, "delivery.domOnly");
+    return t(locale, "delivery.kind.textAttempted");
   }
-  if (result.copied) {
-    return t(locale, "delivery.clipboard");
-  }
-  return t(locale, "delivery.local");
+  if (result.copied) return t(locale, "delivery.kind.clipboardOnly");
+  return t(locale, "delivery.kind.localOnly");
 }
 
 function formatReceiptTime(timestamp: number): string {
@@ -116,6 +130,7 @@ export default function App() {
   const [toast, setToast] = useState<string | null>(null);
   /** Unified busy: Frame / Re-send / Aim-pick in flight (main single-flight) */
   const [captureBusy, setCaptureBusy] = useState(false);
+  const captureBusyRef = useRef(false);
   const [projectCwd, setProjectCwd] = useState("");
   const [recentPreviewUrls, setRecentPreviewUrls] = useState<string[]>([]);
   const [recentProjectCwds, setRecentProjectCwds] = useState<string[]>([]);
@@ -148,6 +163,10 @@ export default function App() {
   useEffect(() => {
     selectionRef.current = selection;
   }, [selection]);
+
+  useEffect(() => {
+    captureBusyRef.current = captureBusy;
+  }, [captureBusy]);
 
   useEffect(() => {
     screenshotPathRef.current = screenshotPath;
@@ -233,6 +252,9 @@ export default function App() {
       status.shellAlive ?? status.terminalAlive ?? status.alive;
     if (typeof shellAlive === "boolean") setTerminalAlive(shellAlive);
 
+    // Keep shell-alive separate from Grok readiness. "running" / launch-requested
+    // never promote to ready unless grokReady/readiness is explicitly ready
+    // (mirrors electron/runtime-policy classifyGrokUiState).
     setGrokState((current) => {
       const raw = String(status.grokState || "").toLowerCase();
       if (
@@ -245,6 +267,7 @@ export default function App() {
       if (raw === "launching") return "launching";
       if (
         status.grokLaunchRequested === true ||
+        status.grokRunning === true ||
         raw === "launch-requested" ||
         raw === "requested" ||
         raw === "running"
@@ -256,7 +279,7 @@ export default function App() {
       if (shellAlive === false) {
         return current === "idle" ? "idle" : "exited";
       }
-      return current;
+      return current === "ready" ? "unknown" : current;
     });
   }
 
@@ -357,7 +380,7 @@ export default function App() {
             screenshotPath:
               saved?.screenshotPath ?? s.lastScreenshotPath ?? null,
             mode: saved?.captureMode || (selected ? "target-context" : "viewport"),
-            delivery: t(loc, "delivery.previous"),
+            delivery: t(loc, "delivery.kind.unknown"),
           });
         }
       })
@@ -399,7 +422,9 @@ export default function App() {
       }),
       api.on("capture:busy", (p) => {
         const st = p as { busy?: boolean };
-        setCaptureBusy(Boolean(st.busy));
+        const busy = Boolean(st.busy);
+        captureBusyRef.current = busy;
+        setCaptureBusy(busy);
       }),
       api.on("app:locale", (p) => {
         const loc = normalizeLocale((p as { locale?: string }).locale);
@@ -458,18 +483,18 @@ export default function App() {
         e.preventDefault();
         void api.setPickMode(false);
       }
-      // ⌘⇧A Aim · ⌘⇧F Frame · ⌘⇧V Re-send
+      // ⌘⇧A Aim · ⌘⇧F Frame · ⌘⇧V Re-send — same busy single-flight as buttons
       if ((e.metaKey || e.ctrlKey) && e.shiftKey) {
         const k = e.key.toLowerCase();
-        if (k === "a") {
+        if (k === "a" || k === "f" || k === "v") {
           e.preventDefault();
-          void togglePickRef.current();
-        } else if (k === "f") {
-          e.preventDefault();
-          void onScreenshotRef.current();
-        } else if (k === "v") {
-          e.preventDefault();
-          void onResendRef.current();
+          if (captureBusyRef.current) {
+            setToast(t(localeRef.current, "toast.busyShortcut"));
+            return;
+          }
+          if (k === "a") void togglePickRef.current();
+          else if (k === "f") void onScreenshotRef.current();
+          else void onResendRef.current();
         }
       }
     };
@@ -511,7 +536,7 @@ export default function App() {
   }
 
   async function togglePick() {
-    if (!isElectron() || captureBusy) return;
+    if (!isElectron() || captureBusyRef.current || captureBusy) return;
     const next = !pickMode;
     const res = await window.vefg.setPickMode(next);
     setPickMode(res.pickMode);
@@ -523,7 +548,8 @@ export default function App() {
   togglePickRef.current = togglePick;
 
   async function onScreenshot() {
-    if (!isElectron() || captureBusy) return;
+    if (!isElectron() || captureBusyRef.current || captureBusy) return;
+    captureBusyRef.current = true;
     const requestedMode = frameMode;
     const effectiveMode =
       requestedMode === "target-context" &&
@@ -548,23 +574,26 @@ export default function App() {
       showToast(err instanceof Error ? err.message : String(err));
     } finally {
       // Main also emits capture:busy; clear local in case event was missed
+      captureBusyRef.current = false;
       setCaptureBusy(false);
     }
   }
   onScreenshotRef.current = onScreenshot;
 
   async function onResend() {
-    if (!isElectron() || captureBusy) return;
+    if (!isElectron() || captureBusyRef.current || captureBusy) return;
     if (!selection && !screenshotPath) {
       showToast(tr("toast.nothingResend"));
       return;
     }
+    captureBusyRef.current = true;
     setCaptureBusy(true);
     try {
       await window.vefg.deliver({});
     } catch (err) {
       showToast(err instanceof Error ? err.message : String(err));
     } finally {
+      captureBusyRef.current = false;
       setCaptureBusy(false);
     }
   }
@@ -1041,8 +1070,15 @@ export default function App() {
               <span>
                 <b>4</b> {tr("status.setup4")}
               </span>
-              <span className={`term-pill ${terminalAlive ? "on" : "off"}`}>
-                {terminalAlive ? tr("status.ptyOn") : tr("status.ptyOff")}
+              <span
+                className={`term-pill ${terminalAlive ? "on" : "off"}`}
+                title={
+                  terminalAlive
+                    ? tr("status.shellOnTitle")
+                    : tr("status.shellOffTitle")
+                }
+              >
+                {terminalAlive ? tr("status.shellOn") : tr("status.shellOff")}
               </span>
               <span className={`term-pill grok ${grokState}`}>{grokLabel}</span>
               <button
@@ -1156,11 +1192,11 @@ export default function App() {
                 className={`term-pill ${terminalAlive ? "on" : "off"}`}
                 title={
                   terminalAlive
-                    ? tr("status.ptyOnTitle")
-                    : tr("status.ptyOffTitle")
+                    ? tr("status.shellOnTitle")
+                    : tr("status.shellOffTitle")
                 }
               >
-                {terminalAlive ? tr("status.ptyOn") : tr("status.ptyOff")}
+                {terminalAlive ? tr("status.shellOn") : tr("status.shellOff")}
               </span>
               <span
                 className={`term-pill grok ${grokState}`}
