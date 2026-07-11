@@ -2,6 +2,15 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.4.1] — 2026-07-11
+
+### Internationalization
+
+- Toolbar **EN / 中文** language toggle with persistence in app settings
+- First launch detects system locale (`zh*` → 中文, otherwise English)
+- Shared catalogs for shell UI, delivery status, and welcome page
+- Main-process paste / busy / Aim warnings follow the selected locale
+
 ## [0.4.0] — 2026-07-11
 
 ### Context integrity

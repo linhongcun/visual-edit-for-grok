@@ -27,6 +27,13 @@ import type {
   PreviewStatus,
   TerminalStatus,
 } from "./types";
+import {
+  detectBrowserLocale,
+  localeLabel,
+  normalizeLocale,
+  t,
+  type Locale,
+} from "./i18n";
 
 const DEFAULT_PREVIEW_URL = "";
 const MIN_TERMINAL_WIDTH = 320;
@@ -59,20 +66,20 @@ function selectionLabelFor(selection: ElementSelection | null): string | null {
   }`;
 }
 
-function deliverySummary(result: CaptureResult): string {
+function deliverySummary(result: CaptureResult, locale: Locale): string {
   if (
     result.imageChipAttempted ||
     (result.pastedToTerminal && result.imageChip)
   ) {
-    return "Image + DOM paste attempted; confirm the image chip in Grok.";
+    return t(locale, "delivery.imageDom");
   }
   if (result.deliveryAttempted || result.pastedToTerminal) {
-    return "DOM/context paste attempted; confirm it in the Grok prompt.";
+    return t(locale, "delivery.domOnly");
   }
   if (result.copied) {
-    return "Copied to clipboard; it was not confirmed in Grok.";
+    return t(locale, "delivery.clipboard");
   }
-  return "Capture saved locally; delivery was not confirmed.";
+  return t(locale, "delivery.local");
 }
 
 function formatReceiptTime(timestamp: number): string {
@@ -119,6 +126,8 @@ export default function App() {
   const [receipt, setReceipt] = useState<CaptureReceipt | null>(null);
   const [receiptThumbnail, setReceiptThumbnail] = useState<string | null>(null);
   const [termFocusNonce, setTermFocusNonce] = useState(0);
+  const [locale, setLocale] = useState<Locale>(() => detectBrowserLocale());
+  const localeRef = useRef(locale);
   const dragging = useRef(false);
   const selectionRef = useRef<ElementSelection | null>(null);
   const screenshotPathRef = useRef<string | null>(null);
@@ -162,6 +171,15 @@ export default function App() {
   }, [pickMode]);
 
   useEffect(() => {
+    localeRef.current = locale;
+    document.documentElement.lang = locale === "zh" ? "zh-CN" : "en";
+  }, [locale]);
+
+  function tr(key: string, vars?: Record<string, string | number>) {
+    return t(locale, key, vars);
+  }
+
+  useEffect(() => {
     const capturePath = receipt?.screenshotPath;
     if (!capturePath || !isElectron()) {
       setReceiptThumbnail(null);
@@ -188,6 +206,20 @@ export default function App() {
   function showToast(msg: string) {
     setToast(msg);
     window.setTimeout(() => setToast((cur) => (cur === msg ? null : cur)), 5200);
+  }
+
+  async function onToggleLocale() {
+    const next: Locale = locale === "zh" ? "en" : "zh";
+    setLocale(next);
+    if (isElectron()) {
+      try {
+        const res = await window.vefg.setLocale(next);
+        setLocale(normalizeLocale(res.locale));
+      } catch {
+        /* keep local */
+      }
+    }
+    showToast(t(next, "toast.langChanged", { lang: localeLabel(next) }));
   }
 
   function applyTerminalRuntime(status: TerminalStatus) {
@@ -241,8 +273,8 @@ export default function App() {
     const isViewportFrame = result.kind === "screenshot" && mode === "viewport";
     return {
       target: isViewportFrame
-        ? "Full viewport"
-        : meta?.target || selectionLabelFor(selected) || "Preview viewport",
+        ? t(localeRef.current, "target.fullViewport")
+        : meta?.target || selectionLabelFor(selected) || t(localeRef.current, "target.previewViewport"),
       pageUrl:
         result.pageUrl ||
         meta?.pageUrl ||
@@ -262,7 +294,7 @@ export default function App() {
         Date.now(),
       screenshotPath: path || meta?.screenshotPath || null,
       mode,
-      delivery: deliverySummary(result),
+      delivery: deliverySummary(result, localeRef.current),
     };
   }
 
@@ -299,12 +331,18 @@ export default function App() {
         setCaptureBusy(Boolean(s.captureBusy));
         setFrameMode(s.frameMode || "viewport");
         if (s.layout?.terminalWidth) setTerminalWidth(s.layout.terminalWidth);
+        if (s.locale) {
+          const loc = normalizeLocale(s.locale);
+          setLocale(loc);
+          localeRef.current = loc;
+        }
 
         const saved = s.lastCapture || s.lastCaptureMeta;
         if (saved || s.lastSelection || s.lastScreenshotPath) {
           const selected = saved?.selection ?? s.lastSelection;
+          const loc = normalizeLocale(s.locale || localeRef.current);
           setReceipt({
-            target: selectionLabelFor(selected) || "Preview viewport",
+            target: selectionLabelFor(selected) || t(loc, "target.previewViewport"),
             pageUrl:
               saved?.pageUrl || selected?.pageUrl || initialPreview.url || "",
             pageTitle:
@@ -313,13 +351,15 @@ export default function App() {
             screenshotPath:
               saved?.screenshotPath ?? s.lastScreenshotPath ?? null,
             mode: saved?.captureMode || (selected ? "target-context" : "viewport"),
-            delivery: "Previous capture loaded; delivery state is unknown.",
+            delivery: t(loc, "delivery.previous"),
           });
         }
       })
       .catch((err) => {
         showToast(
-          `Could not read app state: ${err instanceof Error ? err.message : String(err)}`,
+          t(localeRef.current, "toast.stateFailed", {
+            error: err instanceof Error ? err.message : String(err),
+          }),
         );
       });
 
@@ -355,6 +395,11 @@ export default function App() {
         const st = p as { busy?: boolean };
         setCaptureBusy(Boolean(st.busy));
       }),
+      api.on("app:locale", (p) => {
+        const loc = normalizeLocale((p as { locale?: string }).locale);
+        setLocale(loc);
+        localeRef.current = loc;
+      }),
       api.on("capture:result", (p) => {
         const r = p as CaptureResult & {
           statusMessage?: string;
@@ -364,7 +409,7 @@ export default function App() {
         };
         // Main process owns post-deliver focus handoff — do not storm timers here
         if (r.kind === "error") {
-          showToast(r.message || "Couldn't capture");
+          showToast(r.message || t(localeRef.current, "toast.captureFailed"));
           return;
         }
         const selected =
@@ -387,7 +432,7 @@ export default function App() {
         }
         applyTerminalRuntime(r);
 
-        const delivery = deliverySummary(r);
+        const delivery = deliverySummary(r, localeRef.current);
         if (r.kind === "recopy" || r.kind === "deliver") {
           setReceipt((previous) =>
             previous
@@ -455,7 +500,7 @@ export default function App() {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setPreview((current) => ({ ...current, loading: false, error: message }));
-      showToast(`Preview navigation failed: ${message}`);
+      showToast(tr("toast.navFailed", { error: message }));
     }
   }
 
@@ -483,12 +528,12 @@ export default function App() {
       setFrameMode("viewport");
       showToast(
         preview.selectionStale
-          ? "The target belongs to an earlier page, so Frame will capture the full viewport."
-          : "No target is selected, so Frame will capture the full viewport.",
+          ? tr("toast.staleTargetFrame")
+          : tr("toast.noTargetFrame"),
       );
     }
     if (!terminalAlive) {
-      showToast("Shell is off; the capture will be copied for manual paste.");
+      showToast(tr("toast.shellOffCopy"));
     }
     setCaptureBusy(true);
     try {
@@ -505,7 +550,7 @@ export default function App() {
   async function onResend() {
     if (!isElectron() || captureBusy) return;
     if (!selection && !screenshotPath) {
-      showToast("Nothing to re-send — Aim at an element or grab a Frame first.");
+      showToast(tr("toast.nothingResend"));
       return;
     }
     setCaptureBusy(true);
@@ -529,14 +574,14 @@ export default function App() {
     setReceipt(null);
     setReceiptThumbnail(null);
     setFrameMode("viewport");
-    showToast("Cleared last capture");
+    showToast(tr("toast.cleared"));
   }
 
   async function onOpenCaptureFolder() {
     if (!isElectron()) return;
     try {
       const result = await window.vefg.openCaptureFolder();
-      showToast(`Opened frames: ${shortPath(result.path, 54)}`);
+      showToast(tr("toast.openedFrames", { path: shortPath(result.path, 54) }));
     } catch (err) {
       showToast(err instanceof Error ? err.message : String(err));
     }
@@ -556,8 +601,8 @@ export default function App() {
       setGrokState("idle");
       showToast(
         terminalRestarted
-          ? `Project switched and terminal restarted: ${cwd}`
-          : `Project folder selected: ${cwd}`,
+          ? tr("toast.folderRestarted", { path: cwd })
+          : tr("toast.folderSwitched", { path: cwd }),
       );
     }
   }
@@ -575,8 +620,8 @@ export default function App() {
       setGrokState("idle");
       showToast(
         result.terminalRestarted
-          ? `Project switched and terminal restarted: ${result.projectCwd}`
-          : `Project switched: ${result.projectCwd}`,
+          ? tr("toast.folderRestarted", { path: result.projectCwd })
+          : tr("toast.folderSwitched", { path: result.projectCwd }),
       );
     } catch (err) {
       showToast(err instanceof Error ? err.message : String(err));
@@ -587,7 +632,7 @@ export default function App() {
     if (!isElectron()) return;
     const now = Date.now();
     if (now - lastLaunchAtRef.current < 1800) {
-      showToast("Grok launch was already requested; check the left terminal.");
+      showToast(tr("toast.grokAlready"));
       return;
     }
     lastLaunchAtRef.current = now;
@@ -601,9 +646,7 @@ export default function App() {
           result.grokLaunchRequested ?? (result.grokReady ? undefined : true),
       });
       showToast(
-        result.grokReady
-          ? "Grok reported ready."
-          : "Grok launch requested — confirm its prompt in the left terminal.",
+        result.grokReady ? tr("toast.grokStarted") : tr("toast.grokLaunching"),
       );
       focusGrokTerminal();
     } catch (err) {
@@ -619,7 +662,7 @@ export default function App() {
       setTerminalAlive(true);
       setGrokState("idle");
       lastLaunchAtRef.current = 0;
-      showToast("Shell restarted — launch Grok when ready");
+      showToast(tr("toast.shellRestarted"));
     } catch (err) {
       showToast(err instanceof Error ? err.message : String(err));
     }
@@ -703,26 +746,26 @@ export default function App() {
     (Boolean(preview.error) && isDefaultPreview(preview.url));
   const grokLabel =
     grokState === "ready"
-      ? "grok ready"
+      ? tr("status.grokReady")
       : grokState === "launching"
-        ? "grok launching"
+        ? tr("status.grokLaunching")
         : grokState === "launch-requested"
-          ? "grok requested"
+          ? tr("status.grokRequested")
           : grokState === "exited"
-            ? "grok exited"
-            : "grok not started";
+            ? tr("status.grokExited")
+            : tr("status.grokIdle");
   const launchDisabled =
     grokState === "launching" ||
     grokState === "launch-requested" ||
     grokState === "ready";
   const launchLabel =
     grokState === "launching"
-      ? "Launching…"
+      ? tr("actions.launching")
       : grokState === "launch-requested"
-        ? "Launch requested"
+        ? tr("actions.launchRequested")
         : grokState === "ready"
-          ? "Grok ready"
-          : "Start Grok";
+          ? tr("actions.grokReady")
+          : tr("actions.startGrok");
   const maxTerminalWidth = Math.max(
     MIN_TERMINAL_WIDTH,
     window.innerWidth - MIN_PREVIEW_WIDTH - SPLITTER_WIDTH,
@@ -733,15 +776,25 @@ export default function App() {
     <div className="shell">
       <header className="toolbar">
         <div className="toolbar-row">
-          <div className="brand" title="Visual Capture for Grok">
+          <div className="brand" title={tr("app.name")}>
             <div className="brand-mark" aria-hidden>
               <IconMark />
             </div>
             <div className="brand-text">
-              <span className="brand-name">Capture</span>
-              <span className="brand-sub">for Grok</span>
+              <span className="brand-name">{tr("brand.name")}</span>
+              <span className="brand-sub">{tr("brand.sub")}</span>
             </div>
           </div>
+
+          <button
+            type="button"
+            className="btn btn-ghost lang-toggle"
+            onClick={() => void onToggleLocale()}
+            title={tr("actions.langTitle")}
+            aria-label={tr("actions.langTitle")}
+          >
+            {locale === "zh" ? tr("actions.langEn") : tr("actions.langZh")}
+          </button>
 
           <form
             className={`url-form ${preview.loading ? "loading" : ""}`}
@@ -751,8 +804,8 @@ export default function App() {
             <button
               type="button"
               className="icon-btn"
-              title="Back"
-              aria-label="Go back in preview"
+              title={tr("nav.back")}
+              aria-label={tr("nav.backAria")}
               disabled={preview.canGoBack === false}
               onClick={() => void window.vefg?.goBack()}
             >
@@ -761,8 +814,8 @@ export default function App() {
             <button
               type="button"
               className="icon-btn"
-              title="Forward"
-              aria-label="Go forward in preview"
+              title={tr("nav.forward")}
+              aria-label={tr("nav.forwardAria")}
               disabled={preview.canGoForward === false}
               onClick={() => void window.vefg?.goForward()}
             >
@@ -771,8 +824,8 @@ export default function App() {
             <button
               type="button"
               className="icon-btn"
-              title="Reload preview (⌘R)"
-              aria-label="Reload preview page"
+              title={tr("nav.reload")}
+              aria-label={tr("nav.reloadAria")}
               onClick={() => void window.vefg?.reload()}
             >
               <IconRefresh />
@@ -784,7 +837,7 @@ export default function App() {
               onChange={(e) => setUrlInput(e.target.value)}
               placeholder="http://127.0.0.1:5173"
               spellCheck={false}
-              aria-label="Preview URL"
+              aria-label={tr("nav.urlAria")}
             />
             <datalist id="recent-preview-urls">
               {recentPreviewUrls.map((url) => (
@@ -795,27 +848,27 @@ export default function App() {
               <span
                 className="url-loading-spinner"
                 role="progressbar"
-                aria-label="Loading preview"
+                aria-label={tr("nav.loading")}
               />
             ) : null}
-            <button type="submit" className="url-go" aria-label="Open URL">
-              Go
+            <button type="submit" className="url-go" aria-label={tr("nav.goAria")}>
+              {tr("nav.go")}
             </button>
           </form>
 
           {/* Empty titlebar region: drag the window */}
           <div className="titlebar-drag-spacer" aria-hidden />
 
-          <div className="toolbar-actions" role="group" aria-label="Capture actions">
+          <div className="toolbar-actions" role="group" aria-label={tr("actions.groupAria")}>
             <button
               type="button"
               className="btn btn-ghost"
               onClick={() => void onPickCwd()}
-              title={projectCwd || "Project folder (terminal cwd)"}
-              aria-label="Choose project folder"
+              title={projectCwd || tr("actions.folderTitle")}
+              aria-label={tr("actions.folderAria")}
             >
               <IconFolder />
-              Folder
+              {tr("actions.folder")}
             </button>
             {recentProjectCwds.length > 1 ? (
               <select
@@ -824,10 +877,10 @@ export default function App() {
                 onChange={(event) => {
                   void onRecentProject(event.target.value);
                 }}
-                aria-label="Switch to recent project folder"
-                title="Recent project folders"
+                aria-label={tr("actions.recentAria")}
+                title={tr("actions.recentTitle")}
               >
-                <option value="">Recent…</option>
+                <option value="">{tr("actions.recent")}</option>
                 {recentProjectCwds.map((cwd) => (
                   <option value={cwd} key={cwd} disabled={cwd === projectCwd}>
                     {shortPath(cwd, 30)}
@@ -842,12 +895,12 @@ export default function App() {
               disabled={launchDisabled}
               title={
                 grokState === "launch-requested"
-                  ? "Launch was requested. Confirm the Grok prompt on the left; Reset term to start over."
+                  ? tr("actions.startGrokTitleRequested")
                   : grokState === "ready"
-                    ? "Grok readiness was reported by the terminal runtime"
-                    : "Request Grok to start in the left terminal"
+                    ? tr("actions.startGrokTitleReady")
+                    : tr("actions.startGrokTitleIdle")
               }
-              aria-label="Start Grok in terminal"
+              aria-label={tr("actions.startGrokAria")}
             >
               <IconPlay />
               {launchLabel}
@@ -859,15 +912,15 @@ export default function App() {
               disabled={captureBusy || (!pickMode && !previewCapturable)}
               title={
                 captureBusy
-                  ? "Capture in progress — wait a moment"
-                  : "Aim (⌘⇧A) — capture image + DOM context for Grok"
+                  ? tr("actions.busyTitle")
+                  : tr("actions.aimTitle")
               }
-              aria-label={pickMode ? "Cancel aim mode" : "Aim at page element"}
+              aria-label={pickMode ? tr("actions.aimCancelAria") : tr("actions.aimAria")}
               aria-pressed={pickMode}
               aria-busy={captureBusy}
             >
               <IconCrosshair />
-              {pickMode ? "Aiming… Esc" : "Aim"}
+              {pickMode ? tr("actions.aiming") : tr("actions.aim")}
             </button>
             <div className="frame-control">
               <select
@@ -875,19 +928,19 @@ export default function App() {
                 value={frameMode}
                 onChange={(e) => setFrameMode(e.target.value as FrameMode)}
                 disabled={captureBusy || !previewCapturable}
-                aria-label="Frame capture area"
+                aria-label={tr("actions.frameModeAria")}
                 title={
                   frameMode === "viewport"
-                    ? "Capture the full visible preview"
-                    : "Capture the selected target with surrounding context"
+                    ? tr("actions.frameModeViewport")
+                    : tr("actions.frameModeTarget")
                 }
               >
-                <option value="viewport">Full view</option>
+                <option value="viewport">{tr("actions.frameFull")}</option>
                 <option
                   value="target-context"
                   disabled={!selection || preview.selectionStale}
                 >
-                  Target
+                  {tr("actions.frameTarget")}
                 </option>
               </select>
               <button
@@ -897,20 +950,20 @@ export default function App() {
                 onClick={() => void onScreenshot()}
                 title={
                   captureBusy
-                    ? "Capture in progress — wait a moment"
+                    ? tr("actions.busyTitle")
                     : frameMode === "viewport"
-                      ? "Frame full viewport (⌘⇧F)"
-                      : "Frame selected target with context (⌘⇧F)"
+                      ? tr("actions.frameTitleViewport")
+                      : tr("actions.frameTitleTarget")
                 }
                 aria-label={`Capture ${
                   frameMode === "viewport"
-                    ? "full preview viewport"
-                    : "selected target with context"
+                    ? tr("actions.frameAriaViewport")
+                    : tr("actions.frameAriaTarget")
                 }`}
                 aria-busy={captureBusy}
               >
                 <IconCamera />
-                {captureBusy ? "…" : "Frame"}
+                {captureBusy ? "…" : tr("actions.frame")}
               </button>
             </div>
             <button
@@ -920,16 +973,16 @@ export default function App() {
               onClick={() => void onResend()}
               title={
                 captureBusy
-                  ? "Capture in progress — wait a moment"
+                  ? tr("actions.busyTitle")
                   : hasCapture
-                    ? "Re-send last capture into Grok (⌘⇧V)"
-                    : "Nothing captured yet — Aim or Frame first"
+                    ? tr("actions.resendTitle")
+                    : tr("actions.resendEmpty")
               }
-              aria-label="Re-send last capture to Grok"
+              aria-label={tr("actions.resendAria")}
               aria-busy={captureBusy}
             >
               <IconSend />
-              Re-send
+              {tr("actions.resend")}
             </button>
           </div>
         </div>
@@ -942,13 +995,13 @@ export default function App() {
         >
           {captureBusy ? (
             <div className="banner-inline pick">
-              Busy — capture in flight · Aim / Frame / Re-send paused
+              {tr("status.busy")}
             </div>
           ) : pickMode ? (
             <div className="banner-inline pick">
               {grokState === "launch-requested" || grokState === "ready"
-                ? "Aiming — click a node on the right · Esc cancels · image + DOM paste will be attempted in Grok"
-                : "Aiming — click a node on the right · Esc cancels · Grok is not running, so the capture will stay on the clipboard"}
+                ? tr("status.aimingWithGrok")
+                : tr("status.aimingNoGrok")}
             </div>
           ) : toast ? (
             <div className="toast-inline">{toast}</div>
@@ -960,24 +1013,24 @@ export default function App() {
               <strong>
                 {preview.error
                   ? isDefaultPreview(preview.url)
-                    ? "Default preview isn’t running."
-                    : "Preview isn’t loading."
-                  : "First capture:"}
+                    ? tr("status.setupDefaultDead")
+                    : tr("status.setupPreviewFail")
+                  : tr("status.setupFirst")}
               </strong>
               <span>
-                <b>1</b> Folder
+                <b>1</b> {tr("status.setup1")}
               </span>
               <span>
-                <b>2</b> Start Grok
+                <b>2</b> {tr("status.setup2")}
               </span>
               <span>
-                <b>3</b> URL → Go
+                <b>3</b> {tr("status.setup3")}
               </span>
               <span>
-                <b>4</b> Aim, then write the change in Grok
+                <b>4</b> {tr("status.setup4")}
               </span>
               <span className={`term-pill ${terminalAlive ? "on" : "off"}`}>
-                {terminalAlive ? "pty on" : "pty off"}
+                {terminalAlive ? tr("status.ptyOn") : tr("status.ptyOff")}
               </span>
               <span className={`term-pill grok ${grokState}`}>{grokLabel}</span>
               <button
@@ -985,37 +1038,37 @@ export default function App() {
                 className="link-btn setup-reset"
                 onClick={() => void onRestartTerminal()}
               >
-                Reset term
+                {tr("status.resetTerm")}
               </button>
             </div>
           ) : preview.error ? (
             <div className="banner-inline">
-              Preview failed: {preview.error}
-              <span className="hint"> · is the page running? Try Go / ⌘R</span>
+              {tr("status.previewFailed", { error: preview.error })}
+              <span className="hint">{tr("status.previewHint")}</span>
             </div>
           ) : (
             <>
               {preview.loading ? (
-                <span className="preview-loading-chip">preview loading…</span>
+                <span className="preview-loading-chip">{tr("status.previewLoading")}</span>
               ) : null}
               <span
                 className={`chip-tag ${selectionLabel ? "" : "muted"} ${preview.selectionStale ? "stale" : ""}`}
                 title={
                   preview.selectionStale
-                    ? "This target belongs to a previous page; Re-send keeps its old screenshot, while a new Frame uses the current viewport."
+                    ? tr("status.staleTargetTitle")
                     : undefined
                 }
               >
-                {selectionLabel || "no target"}
-                {preview.selectionStale ? " · prior page" : ""}
+                {selectionLabel || tr("status.noTarget")}
+                {preview.selectionStale ? tr("status.priorPage") : ""}
               </span>
               {receipt ? (
                 <details className="capture-receipt">
                   <summary
                     className="chip-shot"
-                    title={receipt.screenshotPath || "Last capture receipt"}
+                    title={receipt.screenshotPath || tr("status.lastCapture")}
                   >
-                    Last capture
+                    {tr("status.lastCapture")}
                   </summary>
                   <div
                     className="receipt-card"
@@ -1028,7 +1081,7 @@ export default function App() {
                         <IconCamera />
                       </span>
                       <div>
-                        <strong>Capture receipt</strong>
+                        <strong>{tr("status.receipt")}</strong>
                         <span>{formatReceiptTime(receipt.capturedAt)}</span>
                       </div>
                     </div>
@@ -1040,28 +1093,28 @@ export default function App() {
                       />
                     ) : null}
                     <dl className="receipt-grid">
-                      <dt>Target</dt>
+                      <dt>{tr("status.receiptTarget")}</dt>
                       <dd title={receipt.target}>{receipt.target}</dd>
-                      <dt>Page</dt>
+                      <dt>{tr("status.receiptPage")}</dt>
                       <dd title={receipt.pageUrl || receipt.pageTitle}>
                         {shortPath(
-                          receipt.pageTitle || receipt.pageUrl || "Unknown page",
+                          receipt.pageTitle || receipt.pageUrl || tr("status.unknownPage"),
                           58,
                         )}
                       </dd>
-                      <dt>Frame</dt>
+                      <dt>{tr("status.receiptFrame")}</dt>
                       <dd title={receipt.screenshotPath || undefined}>
                         {receipt.screenshotPath
                           ? shortPath(receipt.screenshotPath, 58)
-                          : "No local image path"}
+                          : tr("status.noImagePath")}
                       </dd>
-                      <dt>Mode</dt>
+                      <dt>{tr("status.receiptMode")}</dt>
                       <dd>
                         {receipt.mode === "viewport"
-                          ? "Full viewport"
-                          : "Target + context"}
+                          ? tr("status.fullViewport")
+                          : tr("status.targetContext")}
                       </dd>
-                      <dt>Delivery</dt>
+                      <dt>{tr("status.receiptDelivery")}</dt>
                       <dd className="receipt-delivery">{receipt.delivery}</dd>
                     </dl>
                     <div className="receipt-actions">
@@ -1070,41 +1123,41 @@ export default function App() {
                         className="link-btn"
                         onClick={() => void onOpenCaptureFolder()}
                       >
-                        Open frames folder
+                        {tr("status.openFrames")}
                       </button>
                       <button
                         type="button"
                         className="link-btn danger"
                         onClick={() => void onClear()}
                       >
-                        Clear capture
+                        {tr("status.clearCapture")}
                       </button>
                     </div>
                   </div>
                 </details>
               ) : screenshotPath ? (
                 <span className="chip-shot" title={screenshotPath}>
-                  frame
+                  {tr("status.frameChip")}
                 </span>
               ) : null}
               <span
                 className={`term-pill ${terminalAlive ? "on" : "off"}`}
                 title={
                   terminalAlive
-                    ? "PTY process is alive; the adjacent badge reports whether it is Grok"
-                    : "PTY process is not running"
+                    ? tr("status.ptyOnTitle")
+                    : tr("status.ptyOffTitle")
                 }
               >
-                {terminalAlive ? "pty on" : "pty off"}
+                {terminalAlive ? tr("status.ptyOn") : tr("status.ptyOff")}
               </span>
               <span
                 className={`term-pill grok ${grokState}`}
                 title={
                   grokState === "ready"
-                    ? "The terminal runtime explicitly reported Grok ready"
+                    ? tr("status.grokReadyTitle")
                     : grokState === "launch-requested"
-                      ? "Launch was requested; confirm the Grok prompt on the left"
-                      : "Grok readiness is not confirmed"
+                      ? tr("status.grokRequestedTitle")
+                      : tr("status.grokUnknownTitle")
                 }
               >
                 {grokLabel}
@@ -1115,16 +1168,16 @@ export default function App() {
               >
                 {projectCwd
                   ? shortPath(projectCwd)
-                  : "Choose Folder to anchor edits to your project"}
+                  : tr("status.chooseFolder")}
               </span>
               <div className="chip-actions">
                 <button
                   type="button"
                   className="link-btn"
                   onClick={() => void onRestartTerminal()}
-                  aria-label="Reset terminal session"
+                  aria-label={tr("status.resetTermAria")}
                 >
-                  Reset term
+                  {tr("status.resetTerm")}
                 </button>
               </div>
             </>
@@ -1137,11 +1190,11 @@ export default function App() {
           id="terminal-pane"
           className="terminal-pane"
           style={{ width: terminalWidth }}
-          aria-label="Grok terminal"
+          aria-label={tr("pane.terminalAria")}
         >
           <div className="pane-label">
-            <span>Grok · Terminal</span>
-            <span className="pane-hint">type change here · ⌘R reloads preview only</span>
+            <span>{tr("pane.terminal")}</span>
+            <span className="pane-hint">{tr("pane.terminalHint")}</span>
           </div>
           <div className="terminal-body terminal-body-full">
             <TerminalPane active focusNonce={termFocusNonce} />
@@ -1153,21 +1206,21 @@ export default function App() {
           onMouseDown={onSplitterDown}
           onKeyDown={onSplitterKeyDown}
           tabIndex={0}
-          title="Drag, or use Left/Right arrows to resize panes"
+          title={tr("pane.splitterTitle")}
           role="separator"
           aria-orientation="vertical"
-          aria-label="Resize terminal and preview"
+          aria-label={tr("pane.splitterAria")}
           aria-controls="terminal-pane preview-pane"
           aria-valuemin={MIN_TERMINAL_WIDTH}
           aria-valuemax={maxTerminalWidth}
           aria-valuenow={Math.round(terminalWidth)}
-          aria-valuetext={`${splitPercent}% terminal width`}
+          aria-valuetext={tr("pane.splitterValue", { percent: splitPercent })}
         />
 
         <section
           id="preview-pane"
           className="preview-pane"
-          aria-label="Website preview"
+          aria-label={tr("pane.previewAria")}
         >
           <div className="preview-area" aria-hidden />
         </section>

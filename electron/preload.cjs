@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld("vefg", {
   setAutoPaste: (enabled) =>
     ipcRenderer.invoke("capture:set-auto-paste", enabled),
   setFrameMode: (mode) => ipcRenderer.invoke("capture:set-frame-mode", mode),
+  setLocale: (locale) => ipcRenderer.invoke("app:set-locale", locale),
   openExternal: (url) => ipcRenderer.invoke("shell:open-external", url),
 
   pickProjectDir: () => ipcRenderer.invoke("project:pick-cwd"),
@@ -46,6 +47,7 @@ contextBridge.exposeInMainWorld("vefg", {
       "terminal:exit",
       "terminal:status",
       "terminal:focus-request",
+      "app:locale",
     ];
     if (!allowed.includes(channel)) return () => {};
     const listener = (_event, payload) => handler(payload);

@@ -75,6 +75,7 @@ function testRoundTrip() {
       previewUrl: "http://127.0.0.1:5173/foo",
       projectCwd: "/Users/me/app",
       splitRatio: 0.4,
+      locale: "",
       recentPreviewUrls: [
         "http://127.0.0.1:5173/foo",
         "https://example.com/app",
@@ -105,6 +106,13 @@ function testRecentListsAreDedupedAndCapped() {
   assert.deepStrictEqual(s.recentProjectCwds, ["/tmp/a", "/tmp/b"]);
 }
 
+function testLocaleNormalize() {
+  assert.strictEqual(normalizeSettings({ locale: "zh" }).locale, "zh");
+  assert.strictEqual(normalizeSettings({ locale: "zh-CN" }).locale, "zh");
+  assert.strictEqual(normalizeSettings({ locale: "en-US" }).locale, "en");
+  assert.strictEqual(normalizeSettings({ locale: "fr" }).locale, "");
+}
+
 function testMissingFileDefaults() {
   const file = path.join(os.tmpdir(), `vefg-missing-${Date.now()}.json`);
   const s = loadSettings(file);
@@ -126,6 +134,7 @@ function run() {
     testMissingFileDefaults,
     testDefaultPath,
     testRecentListsAreDedupedAndCapped,
+    testLocaleNormalize,
   ];
   let failed = 0;
   for (const t of tests) {

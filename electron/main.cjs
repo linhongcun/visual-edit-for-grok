@@ -24,6 +24,7 @@ const {
 } = require("./settings-store.cjs");
 const { cleanupCaptureDir } = require("./capture-cleanup.cjs");
 const { buildPasteStatus } = require("./delivery-status.cjs");
+const { t, normalizeLocale, detectLocale } = require("../i18n/index.cjs");
 const {
   canStartCapture,
   shouldRunCleanup,
@@ -105,6 +106,17 @@ function applyLoadedSettings() {
     projectCwd = s.projectCwd;
   }
   if (typeof s.splitRatio === "number") splitRatio = s.splitRatio;
+  // Empty locale = first run → detect system language and persist
+  if (s.locale === "en" || s.locale === "zh") {
+    uiLocale = s.locale;
+  } else {
+    try {
+      uiLocale = detectLocale(app.getLocale?.() || "");
+    } catch {
+      uiLocale = detectLocale("");
+    }
+    persist({ locale: uiLocale });
+  }
   recentPreviewUrls = Array.isArray(s.recentPreviewUrls)
     ? s.recentPreviewUrls
     : [];
@@ -112,6 +124,27 @@ function applyLoadedSettings() {
     ? s.recentProjectCwds.filter((cwd) => isDirectory(cwd))
     : [];
   return s;
+}
+
+/** @param {string} key @param {Record<string, string | number>} [vars] */
+function tr(key, vars) {
+  return t(uiLocale, key, vars);
+}
+
+function setUiLocale(next) {
+  uiLocale = normalizeLocale(next);
+  persist({ locale: uiLocale });
+  sendToRenderer("app:locale", { locale: uiLocale });
+  // Refresh welcome page copy if currently on the guide
+  try {
+    const url = previewView?.webContents?.getURL?.() || "";
+    if (url.includes("welcome.html")) {
+      loadWelcomePreview();
+    }
+  } catch {
+    /* ignore */
+  }
+  return uiLocale;
 }
 
 const isDev = process.env.VEFG_DEV === "1";
@@ -155,6 +188,8 @@ let lastScreenshotPath = null;
 let lastCaptureMeta = null;
 /** Left pane ratio 0–1 */
 let splitRatio = 0.46;
+/** @type {"en" | "zh"} */
+let uiLocale = "en";
 let projectCwd = defaultProjectCwd();
 /** Auto-paste capture into terminal */
 let autoPasteTerminal = true;
@@ -208,7 +243,7 @@ async function withCaptureLock(fn) {
   if (!gate.ok) {
     return {
       busy: true,
-      statusMessage: gate.statusMessage || "Capture in progress — wait a moment.",
+      statusMessage: tr("main.busy"),
     };
   }
   setCaptureBusy(true);
@@ -591,7 +626,7 @@ async function handleTrustedAimSelection(rawSelection) {
     await clearPickerOverlay();
     sendToRenderer("capture:result", {
       kind: "error",
-      message: plan.statusMessage || "Capture in progress — wait a moment.",
+      message: plan.statusMessage || tr("main.aimBusy"),
     });
     return;
   }
@@ -972,7 +1007,7 @@ function loadPreview(url) {
 
 function loadWelcomePreview() {
   if (!previewView || previewView.webContents.isDestroyed()) return;
-  const welcomeUrl = pathToFileURL(path.join(__dirname, "welcome.html")).href;
+  const welcomeUrl = `${pathToFileURL(path.join(__dirname, "welcome.html")).href}?lang=${uiLocale}`;
   previewLoading = true;
   previewError = null;
   void previewView.webContents.loadURL(welcomeUrl).catch((err) => {
@@ -1124,6 +1159,7 @@ async function pasteToGrokMultimodal(text, screenshotPath) {
   if (!grokRunning) {
     writeClipboardBundle();
     const status = buildPasteStatus({
+      locale: uiLocale,
       terminalAlive,
       shellAlive: terminalAlive,
       grokRunning: false,
@@ -1176,6 +1212,7 @@ async function pasteToGrokMultimodal(text, screenshotPath) {
   else writeClipboardBundle();
 
   const status = buildPasteStatus({
+    locale: uiLocale,
     terminalAlive: true,
     shellAlive: true,
     grokRunning: true,
@@ -1262,7 +1299,7 @@ async function deliverCapture(
     } else {
       clipboard.writeText(text);
     }
-    statusMessage = "Copied to clipboard.";
+    statusMessage = tr("main.copied");
   }
 
   // Housekeeping off critical path (throttled)
@@ -1519,7 +1556,7 @@ async function captureScreenshot(options = {}) {
     };
   });
   if (locked && locked.busy) {
-    throw new Error(locked.statusMessage || "Capture in progress");
+    throw new Error(locked.statusMessage || tr("main.busy"));
   }
   // On throw inside lock, prev pair is untouched (takeScreenshotFile no longer mutates)
   if (locked?.pastedToTerminal) {
@@ -1547,7 +1584,7 @@ async function runScreenshotAndNotify(options = {}) {
 
 async function resendLastCaptureAndNotify() {
   if (!lastSelection && !lastScreenshotPath) {
-    const message = "Nothing to re-send — Aim or Frame first";
+    const message = tr("main.nothingResend");
     sendToRenderer("capture:result", { kind: "error", message });
     return { ok: false, message };
   }
@@ -1558,7 +1595,7 @@ async function resendLastCaptureAndNotify() {
     }),
   );
   if (locked?.busy) {
-    const message = locked.statusMessage || "Capture in progress";
+    const message = locked.statusMessage || tr("main.busy");
     sendToRenderer("capture:result", { kind: "error", message });
     return { ok: false, message };
   }
@@ -1762,6 +1799,7 @@ function registerIpc() {
     recentPreviewUrls,
     recentProjectCwds,
     splitRatio,
+    locale: uiLocale,
     autoPasteTerminal,
     frameMode: preferredFrameMode,
     captureBusy: captureInFlight,
@@ -1775,6 +1813,11 @@ function registerIpc() {
     grokState: termSession?.isGrokAlive() ? "running" : "idle",
     layout: getLayoutBounds(),
   }));
+
+  ipcMain.handle("app:set-locale", async (_e, next) => {
+    const locale = setUiLocale(next);
+    return { locale };
+  });
 
   ipcMain.handle("layout:set-split", async (_e, ratio, opts = {}) => {
     const r = Number(ratio);
@@ -1831,10 +1874,9 @@ function registerIpc() {
     const on = Boolean(enabled);
     let warning = null;
     if (on && !isPreviewCapturable()) {
-      warning = "Preview is not ready — open a loaded http(s) page first.";
+      warning = tr("main.pickWarningNoPreview");
     } else if (on && !termSession?.isGrokAlive()) {
-      warning =
-        "Grok is not running. You can still Aim (clipboard), but Start Grok first for auto-send.";
+      warning = tr("main.pickWarningNoGrok");
     }
     await setPickMode(on);
     return {
@@ -1850,7 +1892,7 @@ function registerIpc() {
 
   ipcMain.handle("capture:recopy", async (_e, enrichment = {}) => {
     if (!lastSelection && !lastScreenshotPath) {
-      throw new Error("Nothing to re-send — Aim or Frame first");
+      throw new Error(tr("main.nothingResend"));
     }
     const locked = await withCaptureLock(async () =>
       deliverCapture(lastSelection, lastScreenshotPath, "recopy", {

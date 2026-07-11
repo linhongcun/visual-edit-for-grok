@@ -24,6 +24,7 @@ export interface VefgApi {
     splitRatio: number;
     autoPasteTerminal: boolean;
     frameMode?: FrameMode;
+    locale?: "en" | "zh" | string;
     captureBusy?: boolean;
     terminalAlive: boolean;
     shellAlive?: boolean;
@@ -74,6 +75,7 @@ export interface VefgApi {
   clearCapture: () => Promise<{ ok: boolean }>;
   setAutoPaste: (enabled: boolean) => Promise<{ autoPasteTerminal: boolean }>;
   setFrameMode: (mode: FrameMode) => Promise<{ frameMode: FrameMode }>;
+  setLocale: (locale: "en" | "zh" | string) => Promise<{ locale: "en" | "zh" }>;
   openExternal: (url: string) => Promise<{ ok: boolean }>;
   pickProjectDir: () => Promise<{
     projectCwd: string;

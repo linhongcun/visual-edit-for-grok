@@ -1,6 +1,6 @@
 # Visual Capture for Grok
 
-**Version 0.4.0** · macOS (Apple Silicon)
+**Version 0.4.1** · macOS (Apple Silicon)
 
 Side-by-side workbench: **left = native Grok Build TUI**, **right = website preview**.  
 **Aim** or **Frame** a UI → the app attempts an image paste + grounded DOM-context write in Grok’s PTY. If Grok is not running, text + image stay on the clipboard.
@@ -112,6 +112,7 @@ While a capture is in flight, Aim / Frame / Re-send are disabled (**single-fligh
 | Splitter | Live layout; settings disk write debounced (flush on mouseup) |
 | Focus handoff | After successful auto-deliver, focus returns to Grok terminal |
 | Shortcuts | Global across terminal/preview: ⌘R preview · Esc Aim cancel · ⌘⇧A Aim · ⌘⇧F Frame · ⌘⇧V Re-send |
+| Language | **EN / 中文** toggle in the toolbar (persisted); first launch follows system locale when possible |
 
 ---
 

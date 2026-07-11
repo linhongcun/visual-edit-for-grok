@@ -18,13 +18,15 @@ const DEFAULTS = {
   previewUrl: "",
   projectCwd: "",
   splitRatio: 0.46,
+  /** UI language: "en" | "zh" (empty means detect on first run) */
+  locale: "",
   recentPreviewUrls: [],
   recentProjectCwds: [],
 };
 
 /**
  * @param {unknown} raw
- * @returns {{ settingsVersion: number, previewUrl: string, projectCwd: string, splitRatio: number, recentPreviewUrls: string[], recentProjectCwds: string[] }}
+ * @returns {{ settingsVersion: number, previewUrl: string, projectCwd: string, splitRatio: number, locale: string, recentPreviewUrls: string[], recentProjectCwds: string[] }}
  */
 function normalizeSettings(raw) {
   const out = { ...DEFAULTS };
@@ -42,6 +44,13 @@ function normalizeSettings(raw) {
   }
   if (typeof o.splitRatio === "number" && Number.isFinite(o.splitRatio)) {
     out.splitRatio = Math.min(0.75, Math.max(0.22, o.splitRatio));
+  }
+  if (typeof o.locale === "string") {
+    const loc = o.locale.trim().toLowerCase();
+    if (loc === "en" || loc === "zh") out.locale = loc;
+    else if (loc.startsWith("zh")) out.locale = "zh";
+    else if (loc.startsWith("en")) out.locale = "en";
+    else if (loc === "") out.locale = "";
   }
   if (Array.isArray(o.recentPreviewUrls)) {
     out.recentPreviewUrls = Array.from(
@@ -66,7 +75,7 @@ function normalizeSettings(raw) {
 
 /**
  * @param {string} filePath
- * @returns {{ settingsVersion: number, previewUrl: string, projectCwd: string, splitRatio: number, recentPreviewUrls: string[], recentProjectCwds: string[] }}
+ * @returns {{ settingsVersion: number, previewUrl: string, projectCwd: string, splitRatio: number, locale: string, recentPreviewUrls: string[], recentProjectCwds: string[] }}
  */
 function loadSettings(filePath) {
   try {
@@ -80,8 +89,8 @@ function loadSettings(filePath) {
 
 /**
  * @param {string} filePath
- * @param {Partial<{ settingsVersion: number, previewUrl: string, projectCwd: string, splitRatio: number, recentPreviewUrls: string[], recentProjectCwds: string[] }>} partial
- * @returns {{ settingsVersion: number, previewUrl: string, projectCwd: string, splitRatio: number, recentPreviewUrls: string[], recentProjectCwds: string[] }}
+ * @param {Partial<{ settingsVersion: number, previewUrl: string, projectCwd: string, splitRatio: number, locale: string, recentPreviewUrls: string[], recentProjectCwds: string[] }>} partial
+ * @returns {{ settingsVersion: number, previewUrl: string, projectCwd: string, splitRatio: number, locale: string, recentPreviewUrls: string[], recentProjectCwds: string[] }}
  */
 function saveSettings(filePath, partial = {}) {
   const prev = loadSettings(filePath);

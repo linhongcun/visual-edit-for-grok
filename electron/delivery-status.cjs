@@ -1,7 +1,10 @@
 /**
  * Pure status messages for capture → Grok delivery outcomes.
  * Used by main process and unit tests.
- *
+ */
+const { t, normalizeLocale } = require("../i18n/index.cjs");
+
+/**
  * @param {{
  *   terminalAlive?: boolean,
  *   shellAlive?: boolean,
@@ -11,6 +14,7 @@
  *   textPasted: boolean,
  *   imagePrepared: boolean,
  *   imageChipAttempted: boolean,
+ *   locale?: string,
  * }} input
  * @returns {{
  *   pasted: boolean,
@@ -30,6 +34,7 @@
  * }}
  */
 function buildPasteStatus(input = {}) {
+  const locale = normalizeLocale(input.locale || "en");
   // Backward compatibility: before shell/Grok state was split, terminalAlive
   // meant the currently running PTY could receive Grok input.
   const legacyTerminalAlive = Boolean(input.terminalAlive);
@@ -77,8 +82,8 @@ function buildPasteStatus(input = {}) {
       pasted: false,
       fallback: "clipboard-only",
       statusMessage: shellAlive
-        ? "Shell is running, but Grok is not — copied text+image. Start Grok, then click Re-send (or paste with ⌘V)."
-        : "Terminal not running — copied text+image. Start Grok, then click Re-send (or paste with ⌘V).",
+        ? t(locale, "main.shellNoGrok")
+        : t(locale, "main.termOff"),
     };
   }
 
@@ -90,19 +95,15 @@ function buildPasteStatus(input = {}) {
   let fallback = null;
 
   if (pasted && imageChipAttempted) {
-    statusMessage =
-      "Attempted image paste + DOM text write. Grok readiness and image attachment are unconfirmed — verify the prompt before submitting.";
+    statusMessage = t(locale, "main.imageAttempted");
     fallback = "verify-image-paste";
   } else if (pasted && !imageChipAttempted && imagePrepared) {
-    statusMessage =
-      "DOM text was written to the shell; Grok readiness is unknown. The image is on the clipboard — press ⌘V if needed.";
+    statusMessage = t(locale, "main.textImageClip");
     fallback = "manual-image-paste";
   } else if (pasted) {
-    statusMessage =
-      "DOM context was written to the shell. Grok readiness and receipt are unconfirmed — verify the prompt before submitting.";
+    statusMessage = t(locale, "main.textOnly");
   } else {
-    statusMessage =
-      "Could not paste into terminal — text+image copied. Focus Grok and press ⌘V.";
+    statusMessage = t(locale, "main.pasteFailed");
     fallback = "clipboard-only";
   }
 

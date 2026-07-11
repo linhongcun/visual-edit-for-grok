@@ -309,6 +309,10 @@ summary:focus-visible,
   transform: scale(0.97);
 }
 
+.toolbar-row .lang-toggle {
+  margin-right: 2px;
+}
+
 .toolbar-actions {
   display: flex;
   align-items: center;
@@ -409,6 +413,14 @@ summary:focus-visible,
 .btn:disabled {
   opacity: 0.42;
   cursor: not-allowed;
+}
+
+.lang-toggle {
+  min-width: 44px;
+  padding-inline: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
 }
 
 .btn-ghost {

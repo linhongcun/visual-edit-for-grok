@@ -50,6 +50,18 @@ function testNoTerminalStatus() {
   assert.ok(r.statusMessage.includes("Start Grok"));
 }
 
+function testZhLocaleStatusMessage() {
+  const r = buildPasteStatus({
+    locale: "zh",
+    terminalAlive: false,
+    textPasted: false,
+    imagePrepared: true,
+    imageChipAttempted: false,
+  });
+  assert.ok(r.statusMessage.includes("启动 Grok") || r.statusMessage.includes("Grok"));
+  assert.ok(!r.statusMessage.includes("Terminal not running"));
+}
+
 function testSuccessWithImageChipAttempt() {
   const r = buildPasteStatus({
     terminalAlive: true,
@@ -176,6 +188,7 @@ function run() {
   const tests = [
     testPayloadHasElementAndShotMultimodalHint,
     testNoTerminalStatus,
+    testZhLocaleStatusMessage,
     testSuccessWithImageChipAttempt,
     testManualImageFallback,
     testShellWriteNeverClaimsGrokReceipt,
