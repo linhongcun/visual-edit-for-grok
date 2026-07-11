@@ -2,6 +2,14 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.6.4] — 2026-07-11
+
+### Velocity-proportional trackpad scroll
+
+- Scroll distance scales with gesture speed: slow glide ≈ 1×, fast flick accelerates
+- Uses both delta magnitude and inter-event timing (`trackpadScrollPixels`)
+- Unit tests cover slow vs fast gain and direction
+
 ## [0.6.3] — 2026-07-11
 
 ### Fix trackpad scroll broken by 0.6.2

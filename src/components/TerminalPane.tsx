@@ -3,17 +3,11 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { trackpadScrollPixels } from "../trackpad-scroll.cjs";
 import "@xterm/xterm/css/xterm.css";
 
 /** Slightly smaller than 13 so the same pane fits more columns (helps wide CJK tables). */
 const TERM_FONT_SIZE = 12;
-
-/**
- * Multiply trackpad/mouse wheel pixel deltas before applying to the viewport.
- * xterm's own handler uses scrollSensitivity=1-equivalent pixel math and feels
- * glacial on macOS trackpads; we drive `.xterm-viewport.scrollTop` directly.
- */
-const TRACKPAD_SCROLL_GAIN = 3.25;
 
 /**
  * Prefer mono fonts that measure CJK as double-width consistently.
@@ -57,6 +51,8 @@ export default function TerminalPane({
   const focusTimerRef = useRef<number | null>(null);
   const resizeTimerRef = useRef<number | null>(null);
   const sessionIdRef = useRef(sessionId);
+  /** Last wheel timestamp for trackpad velocity (px/ms) */
+  const lastWheelAtRef = useRef(0);
 
   useEffect(() => {
     sessionIdRef.current = sessionId;
@@ -188,9 +184,9 @@ export default function TerminalPane({
       scrollback: 5000,
       convertEol: false,
       windowsMode: false,
-      // Used when custom wheel is not attached yet / falls through
-      scrollSensitivity: 8,
-      fastScrollSensitivity: 16,
+      // Fallback only if custom handler cannot run
+      scrollSensitivity: 3,
+      fastScrollSensitivity: 8,
       smoothScrollDuration: 0,
       rescaleOverlappingGlyphs: false,
     });
@@ -214,13 +210,11 @@ export default function TerminalPane({
     termRef.current = term;
     fitRef.current = fit;
     lastDimsRef.current = { cols: term.cols, rows: term.rows };
+    lastWheelAtRef.current = 0;
 
     /**
-     * Drive scroll the same way xterm does internally (viewport.scrollTop),
-     * but with a higher gain for macOS trackpad pixel deltas.
-     *
-     * Previous approach used term.scrollLines() + swallowed zero-line events,
-     * which blocked scrolling entirely on small trackpad deltas.
+     * Velocity-proportional trackpad scroll via viewport.scrollTop
+     * (same mechanism as xterm, with dynamic gain).
      * Return `false` so xterm skips its default low-gain handler.
      */
     term.attachCustomWheelEventHandler((ev) => {
@@ -235,13 +229,13 @@ export default function TerminalPane({
       const viewport = term.element?.querySelector(
         ".xterm-viewport",
       ) as HTMLElement | null;
-      if (!viewport) return true; // fall back to xterm default
+      if (!viewport) return true;
 
-      // Alt-buffer / no overflow: let xterm map wheel to app cursor keys
       const maxScroll = Math.max(
         0,
         viewport.scrollHeight - viewport.clientHeight,
       );
+      // Alt-buffer / no overflow: let xterm map wheel to app cursor keys
       if (maxScroll < 1) return true;
 
       const rowPx = Math.max(
@@ -250,23 +244,24 @@ export default function TerminalPane({
           Math.max(1, term.rows),
       );
 
-      let pixels = 0;
-      if (ev.deltaMode === WheelEvent.DOM_DELTA_LINE) {
-        pixels = ev.deltaY * rowPx * 3;
-      } else if (ev.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
-        pixels = ev.deltaY * viewport.clientHeight;
-      } else {
-        // DOM_DELTA_PIXEL — trackpad
-        pixels = ev.deltaY * TRACKPAD_SCROLL_GAIN;
-      }
+      const now = performance.now();
+      const dt =
+        lastWheelAtRef.current > 0 ? now - lastWheelAtRef.current : 16;
+      lastWheelAtRef.current = now;
 
+      const pixels = trackpadScrollPixels(
+        ev.deltaY,
+        ev.deltaMode,
+        rowPx,
+        viewport.clientHeight,
+        dt,
+      );
       if (pixels === 0) return true;
 
       const next = Math.min(
         maxScroll,
         Math.max(0, viewport.scrollTop + pixels),
       );
-      // Assigning scrollTop fires xterm's scroll listener and syncs the buffer.
       viewport.scrollTop = next;
       ev.preventDefault();
       return false;
