@@ -27,6 +27,20 @@ export interface VefgApi {
     frameMode?: FrameMode;
     locale?: "en" | "zh" | string;
     captureBusy?: boolean;
+    terminals?: {
+      sessions: Array<{
+        id: string;
+        cwd: string;
+        label: string;
+        createdAt?: number;
+        shellAlive?: boolean;
+        grokRunning?: boolean;
+        mode?: string | null;
+      }>;
+      activeId: string | null;
+      maxSessions?: number;
+    };
+    activeTerminalId?: string | null;
     terminalAlive: boolean;
     shellAlive?: boolean;
     grokLaunchRequested?: boolean;
@@ -93,18 +107,65 @@ export interface VefgApi {
     opts?: { force?: boolean; persist?: boolean },
   ) => Promise<LayoutBounds>;
   setPreviewCollapsed: (collapsed: boolean) => Promise<LayoutBounds>;
+  terminalList: () => Promise<{
+    sessions: Array<{
+      id: string;
+      cwd: string;
+      label: string;
+      createdAt?: number;
+      shellAlive?: boolean;
+      grokRunning?: boolean;
+      mode?: string | null;
+    }>;
+    activeId: string | null;
+    maxSessions?: number;
+  }>;
+  terminalCreate: (opts?: {
+    cwd?: string;
+    label?: string;
+    activate?: boolean;
+  }) => Promise<{
+    ok: boolean;
+    sessionId: string;
+    sessions: Array<{
+      id: string;
+      cwd: string;
+      label: string;
+      shellAlive?: boolean;
+      grokRunning?: boolean;
+    }>;
+    activeId: string | null;
+    maxSessions?: number;
+  }>;
+  terminalClose: (sessionId: string) => Promise<{
+    sessions: Array<{ id: string; cwd: string; label: string }>;
+    activeId: string | null;
+  }>;
+  terminalSetActive: (sessionId: string) => Promise<{
+    sessions: Array<{ id: string; cwd: string; label: string }>;
+    activeId: string | null;
+  }>;
   terminalStart: (opts?: {
     cols?: number;
     rows?: number;
-  }) => Promise<{ ok: boolean; cwd: string }>;
-  terminalWrite: (data: string) => Promise<{ ok: boolean }>;
-  terminalPaste: (text: string) => Promise<{ ok: boolean }>;
+    sessionId?: string;
+  }) => Promise<{ ok: boolean; cwd: string; sessionId?: string }>;
+  terminalWrite: (
+    dataOrOpts: string | { data: string; sessionId?: string },
+    sessionId?: string,
+  ) => Promise<{ ok: boolean }>;
+  terminalPaste: (
+    textOrOpts: string | { text: string; sessionId?: string },
+    sessionId?: string,
+  ) => Promise<{ ok: boolean }>;
   terminalResize: (size: {
     cols: number;
     rows: number;
+    sessionId?: string;
   }) => Promise<{ ok: boolean }>;
-  terminalLaunchGrok: () => Promise<{
+  terminalLaunchGrok: (opts?: { sessionId?: string }) => Promise<{
     ok: boolean;
+    sessionId?: string;
     terminalAlive?: boolean;
     shellAlive?: boolean;
     grokLaunchRequested?: boolean;
@@ -117,7 +178,8 @@ export interface VefgApi {
   terminalRestart: (opts?: {
     cols?: number;
     rows?: number;
-  }) => Promise<{ ok: boolean; cwd: string }>;
+    sessionId?: string;
+  }) => Promise<{ ok: boolean; cwd: string; sessionId?: string }>;
   on: (channel: string, handler: (payload: unknown) => void) => () => void;
 }
 

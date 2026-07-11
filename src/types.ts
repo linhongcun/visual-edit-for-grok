@@ -64,6 +64,7 @@ export interface PreviewStatus {
 }
 
 export interface TerminalStatus {
+  sessionId?: string;
   alive?: boolean;
   shellAlive?: boolean;
   terminalAlive?: boolean;

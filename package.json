@@ -1,7 +1,7 @@
 {
   "name": "visual-edit-for-grok",
-  "version": "0.4.7",
-  "description": "Visual Capture for Grok — native Grok PTY + secure Aim/Frame preview with image-paste attempts and grounded DOM context",
+  "version": "0.5.0",
+  "description": "Visual Capture for Grok — multi-terminal Grok PTY + secure Aim/Frame preview with image-paste attempts and grounded DOM context",
   "main": "electron/main.cjs",
   "private": true,
   "engines": {
@@ -14,7 +14,7 @@
     "build": "vite build",
     "start": "npm run build && electron .",
     "demo": "python3 -m http.server 8765 --directory demo",
-    "test": "node test/clipboard-payload.test.cjs && node test/settings-store.test.cjs && node test/capture-cleanup.test.cjs && node test/deliver-helpers.test.cjs && node test/runtime-policy.test.cjs && node test/terminal.test.cjs && node test/operator-guidance.test.cjs",
+    "test": "node test/clipboard-payload.test.cjs && node test/settings-store.test.cjs && node test/capture-cleanup.test.cjs && node test/deliver-helpers.test.cjs && node test/runtime-policy.test.cjs && node test/terminal.test.cjs && node test/terminal-hub.test.cjs && node test/operator-guidance.test.cjs",
     "test:electron": "npm run build && node test/electron-smoke.test.cjs",
     "test:packaged": "VEFG_PACKAGED_BINARY=\"release/mac-arm64/Visual Capture for Grok.app/Contents/MacOS/Visual Capture for Grok\" node test/electron-smoke.test.cjs",
     "rebuild": "electron-builder install-app-deps",

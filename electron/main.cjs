@@ -18,6 +18,16 @@ const { execFileSync } = require("child_process");
 const { buildClipboardPayload } = require("./clipboard-payload.cjs");
 const { TerminalSession } = require("./terminal.cjs");
 const {
+  MAX_TERMINAL_SESSIONS,
+  labelFromCwd,
+  createSessionMeta,
+  canCreateSession,
+  nextActiveAfterClose,
+  normalizeSessionList,
+  sessionsSnapshot,
+  anySessionAlive,
+} = require("./terminal-hub.cjs");
+const {
   loadSettings,
   saveSettings,
   defaultSettingsPath,
@@ -136,6 +146,7 @@ function applyLoadedSettings() {
   recentProjectCwds = Array.isArray(s.recentProjectCwds)
     ? s.recentProjectCwds.filter((cwd) => isDirectory(cwd))
     : [];
+  seedTerminalsFromSettings(s);
   return s;
 }
 
@@ -181,7 +192,7 @@ let isQuitting = false;
 let quitDialogOpen = false;
 
 function sessionAliveForQuit() {
-  return Boolean(termSession?.isAlive());
+  return anySessionAlive(listTerminalRuntime());
 }
 
 /**
@@ -190,11 +201,12 @@ function sessionAliveForQuit() {
  */
 function requestQuitConfirmation(event, reason = "close") {
   if (isQuitting) return false;
+  const runtime = listTerminalRuntime();
   if (
     !shouldConfirmQuit({
-      sessionAlive: sessionAliveForQuit(),
-      shellAlive: termSession?.isAlive(),
-      grokRunning: termSession?.isGrokAlive(),
+      sessionAlive: anySessionAlive(runtime),
+      shellAlive: runtime.some((s) => s.shellAlive),
+      grokRunning: runtime.some((s) => s.grokRunning),
     })
   ) {
     return false;
@@ -218,10 +230,7 @@ function requestQuitConfirmation(event, reason = "close") {
       quitDialogOpen = false;
       if (response === 0) {
         isQuitting = true;
-        if (termSession) {
-          termSession.dispose();
-          termSession = null;
-        }
+        disposeAllTerminals();
         app.quit();
       }
     })
@@ -278,8 +287,13 @@ function defaultProjectCwd() {
 let mainWindow = null;
 /** @type {BrowserView | null} */
 let previewView = null;
-/** @type {TerminalSession | null} */
-let termSession = null;
+/**
+ * Multi-terminal slots: metadata + TerminalSession (PTY wrapper).
+ * @type {Map<string, { meta: { id: string, cwd: string, label: string, createdAt: number }, pty: TerminalSession }>}
+ */
+const terminalSlots = new Map();
+/** @type {string | null} */
+let activeTerminalId = null;
 
 let pickMode = false;
 let previewUrl = "";
@@ -295,6 +309,7 @@ let splitRatio = 0.52;
 let previewCollapsed = false;
 /** @type {"en" | "zh"} */
 let uiLocale = "en";
+/** Mirrors the active terminal's project folder */
 let projectCwd = defaultProjectCwd();
 /** Auto-paste capture into terminal */
 let autoPasteTerminal = true;
@@ -474,10 +489,7 @@ function createWindow() {
   mainWindow.on("closed", () => {
     mainWindow = null;
     previewView = null;
-    if (termSession) {
-      termSession.dispose();
-      termSession = null;
-    }
+    disposeAllTerminals();
   });
 
   mainWindow.webContents.on("did-finish-load", () => {
@@ -1289,6 +1301,8 @@ function putScreenshotOnClipboardForGrok(filePath) {
  * }>}
  */
 async function pasteToGrokMultimodal(text, screenshotPath) {
+  const active = getActiveSlot();
+  const termSession = active?.pty || null;
   const terminalAlive = Boolean(termSession?.isAlive());
   const grokRunning = Boolean(termSession?.isGrokAlive());
   const hasShot = Boolean(screenshotPath && fs.existsSync(screenshotPath));
@@ -1341,7 +1355,7 @@ async function pasteToGrokMultimodal(text, screenshotPath) {
     if (imagePrepared) {
       await delay(60);
       try {
-        imageChipAttempted = Boolean(termSession.write("\x16"));
+        imageChipAttempted = Boolean(termSession?.write("\x16"));
         await delay(280);
       } catch (err) {
         console.warn("Ctrl+V inject failed:", err);
@@ -1352,7 +1366,7 @@ async function pasteToGrokMultimodal(text, screenshotPath) {
 
   let textPasted = false;
   try {
-    textPasted = termSession.paste(text);
+    textPasted = Boolean(termSession?.paste(text));
     await delay(40);
   } catch (err) {
     console.warn("text paste failed:", err);
@@ -1429,7 +1443,7 @@ async function deliverCapture(
   let imagePrepared = false;
   let fallback = null;
   let statusMessage = "";
-  let terminalAlive = Boolean(termSession?.isAlive());
+  let terminalAlive = Boolean(getActiveSlot()?.pty?.isAlive());
   let deliveryDetails = {};
 
   if (wantPaste) {
@@ -1801,24 +1815,216 @@ async function resendLastCaptureAndNotify() {
   return locked;
 }
 
-function ensureTerminal() {
-  if (termSession) return termSession;
-  termSession = new TerminalSession({
-    cwd: projectCwd,
-    onData: (data) => sendToRenderer("terminal:data", data),
+function listTerminalRuntime() {
+  return Array.from(terminalSlots.values()).map((slot) => ({
+    id: slot.meta.id,
+    cwd: slot.meta.cwd,
+    label: slot.meta.label,
+    createdAt: slot.meta.createdAt,
+    shellAlive: slot.pty.isAlive(),
+    grokRunning: slot.pty.isGrokAlive(),
+    mode: slot.pty.getMode(),
+    alive: slot.pty.isAlive(),
+  }));
+}
+
+function getActiveSlot() {
+  if (activeTerminalId && terminalSlots.has(activeTerminalId)) {
+    return terminalSlots.get(activeTerminalId) || null;
+  }
+  const first = terminalSlots.values().next().value;
+  if (first) {
+    activeTerminalId = first.meta.id;
+    return first;
+  }
+  return null;
+}
+
+function getSlot(sessionId) {
+  if (sessionId && terminalSlots.has(sessionId)) {
+    return terminalSlots.get(sessionId) || null;
+  }
+  return getActiveSlot();
+}
+
+function syncProjectCwdFromActive() {
+  const active = getActiveSlot();
+  if (active?.meta?.cwd) projectCwd = active.meta.cwd;
+}
+
+function persistTerminalSessions(force = true) {
+  syncProjectCwdFromActive();
+  const list = Array.from(terminalSlots.values()).map((slot) => ({
+    id: slot.meta.id,
+    cwd: slot.meta.cwd,
+    label: slot.meta.label,
+    createdAt: slot.meta.createdAt,
+  }));
+  persistDebounced(
+    {
+      projectCwd,
+      terminalSessions: list,
+      activeTerminalId: activeTerminalId || "",
+    },
+    { force },
+  );
+}
+
+function broadcastTerminalSessions() {
+  syncProjectCwdFromActive();
+  const snap = sessionsSnapshot(listTerminalRuntime(), activeTerminalId);
+  sendToRenderer("terminal:sessions", snap);
+  return snap;
+}
+
+function emitTerminalStatus(slot, extra = {}) {
+  if (!slot) return;
+  const alive = slot.pty.isAlive();
+  const grok = slot.pty.isGrokAlive();
+  sendToRenderer("terminal:status", {
+    sessionId: slot.meta.id,
+    alive,
+    shellAlive: alive,
+    terminalMode: slot.pty.getMode(),
+    grokRunning: grok,
+    grokLaunchRequested: grok,
+    grokReady: grok ? null : false,
+    grokReadiness: grok ? "unknown" : "not-running",
+    grokState: grok ? "running" : alive ? "idle" : "exited",
+    cwd: slot.meta.cwd,
+    ...extra,
+  });
+  broadcastTerminalSessions();
+}
+
+function disposeAllTerminals() {
+  for (const slot of terminalSlots.values()) {
+    try {
+      slot.pty.dispose();
+    } catch {
+      /* ignore */
+    }
+  }
+  terminalSlots.clear();
+  activeTerminalId = null;
+}
+
+/**
+ * @param {{ id?: string, cwd?: string, label?: string, createdAt?: number, activate?: boolean }} [opts]
+ */
+function createTerminalSlot(opts = {}) {
+  const gate = canCreateSession(terminalSlots.size, MAX_TERMINAL_SESSIONS);
+  if (!gate.ok) {
+    throw new Error(
+      tr("term.maxSessions", { max: MAX_TERMINAL_SESSIONS }) ||
+        `At most ${MAX_TERMINAL_SESSIONS} terminals.`,
+    );
+  }
+  const cwd =
+    typeof opts.cwd === "string" && isDirectory(opts.cwd)
+      ? opts.cwd
+      : projectCwd || defaultProjectCwd();
+  const meta = createSessionMeta({
+    id: opts.id,
+    cwd,
+    label: opts.label,
+    createdAt: opts.createdAt,
+  });
+  if (terminalSlots.has(meta.id)) {
+    return terminalSlots.get(meta.id);
+  }
+  const pty = new TerminalSession({
+    cwd: meta.cwd,
+    onData: (data) =>
+      sendToRenderer("terminal:data", { sessionId: meta.id, data }),
     onExit: (code, _signal, mode) => {
-      sendToRenderer("terminal:exit", { code, mode });
-      sendToRenderer("terminal:status", {
-        alive: false,
-        shellAlive: false,
-        terminalMode: null,
-        grokRunning: false,
-        grokLaunchRequested: false,
-        grokReady: false,
+      sendToRenderer("terminal:exit", {
+        sessionId: meta.id,
+        code,
+        mode,
       });
+      emitTerminalStatus(
+        terminalSlots.get(meta.id),
+        { alive: false, shellAlive: false, reason: "exit" },
+      );
     },
   });
-  return termSession;
+  const slot = { meta, pty };
+  terminalSlots.set(meta.id, slot);
+  if (opts.activate !== false || !activeTerminalId) {
+    activeTerminalId = meta.id;
+  }
+  persistTerminalSessions(true);
+  broadcastTerminalSessions();
+  return slot;
+}
+
+function ensureTerminal(sessionId) {
+  const existing = getSlot(sessionId);
+  if (existing) return existing;
+  return createTerminalSlot({ cwd: projectCwd, activate: true });
+}
+
+function setActiveTerminal(sessionId) {
+  if (!sessionId || !terminalSlots.has(sessionId)) {
+    return broadcastTerminalSessions();
+  }
+  activeTerminalId = sessionId;
+  syncProjectCwdFromActive();
+  persistTerminalSessions(true);
+  return broadcastTerminalSessions();
+}
+
+function closeTerminalSlot(sessionId) {
+  if (!sessionId || !terminalSlots.has(sessionId)) {
+    return broadcastTerminalSessions();
+  }
+  if (terminalSlots.size <= 1) {
+    throw new Error(
+      tr("term.keepOne") || "Keep at least one terminal tab.",
+    );
+  }
+  const ordered = Array.from(terminalSlots.keys());
+  const slot = terminalSlots.get(sessionId);
+  try {
+    slot?.pty.dispose();
+  } catch {
+    /* ignore */
+  }
+  terminalSlots.delete(sessionId);
+  activeTerminalId = nextActiveAfterClose(
+    ordered,
+    activeTerminalId,
+    sessionId,
+  );
+  syncProjectCwdFromActive();
+  persistTerminalSessions(true);
+  return broadcastTerminalSessions();
+}
+
+function seedTerminalsFromSettings(s) {
+  disposeAllTerminals();
+  const normalized = normalizeSessionList(
+    s?.terminalSessions,
+    projectCwd || defaultProjectCwd(),
+  );
+  for (const meta of normalized.sessions) {
+    createTerminalSlot({
+      id: meta.id,
+      cwd: isDirectory(meta.cwd) ? meta.cwd : projectCwd,
+      label: meta.label,
+      createdAt: meta.createdAt,
+      activate: false,
+    });
+  }
+  const preferred =
+    typeof s?.activeTerminalId === "string" ? s.activeTerminalId : "";
+  if (preferred && terminalSlots.has(preferred)) {
+    activeTerminalId = preferred;
+  } else {
+    activeTerminalId = normalized.activeId;
+  }
+  syncProjectCwdFromActive();
 }
 
 function isDirectory(cwd) {
@@ -1833,50 +2039,61 @@ async function switchProjectCwd(cwd) {
   if (typeof cwd !== "string" || !isDirectory(cwd)) {
     throw new Error("Invalid directory");
   }
-  if (cwd === projectCwd) {
-    return { projectCwd, terminalRestarted: false, canceled: false };
+  const slot = ensureTerminal();
+  if (cwd === slot.meta.cwd) {
+    return {
+      projectCwd: slot.meta.cwd,
+      sessionId: slot.meta.id,
+      terminalRestarted: false,
+      canceled: false,
+    };
   }
-  if (termSession?.isGrokAlive()) {
+  if (slot.pty.isGrokAlive()) {
     const confirmation = await dialog.showMessageBox(mainWindow, {
       type: "warning",
       title: "Switch project folder?",
-      message: "Switching folders will stop the active Grok session.",
-      detail: `Current: ${projectCwd}\nNew: ${cwd}`,
+      message: "Switching folders will stop Grok in this terminal tab.",
+      detail: `Current: ${slot.meta.cwd}\nNew: ${cwd}`,
       buttons: ["Switch & stop Grok", "Cancel"],
       defaultId: 1,
       cancelId: 1,
       noLink: true,
     });
     if (confirmation.response !== 0) {
-      return { projectCwd, terminalRestarted: false, canceled: true };
+      return {
+        projectCwd: slot.meta.cwd,
+        sessionId: slot.meta.id,
+        terminalRestarted: false,
+        canceled: true,
+      };
     }
   }
+  slot.meta.cwd = cwd;
+  slot.meta.label = labelFromCwd(cwd);
   projectCwd = cwd;
   recentProjectCwds = [
     projectCwd,
     ...recentProjectCwds.filter((item) => item !== projectCwd),
   ].slice(0, 8);
   persist({ projectCwd, recentProjectCwds });
+  persistTerminalSessions(true);
 
   let terminalRestarted = false;
-  if (termSession?.isAlive()) {
-    const { cols, rows } = termSession;
-    termSession.start({ cwd: projectCwd, cols, rows });
+  if (slot.pty.isAlive()) {
+    const { cols, rows } = slot.pty;
+    slot.pty.start({ cwd, cols, rows });
     terminalRestarted = true;
-    sendToRenderer("terminal:status", {
-      alive: true,
-      shellAlive: true,
-      terminalMode: "shell",
-      grokRunning: false,
-      grokLaunchRequested: false,
-      grokReady: false,
-      cwd: projectCwd,
-      reason: "project-changed",
-    });
+    emitTerminalStatus(slot, { reason: "project-changed" });
   } else {
-    termSession?.setCwd(projectCwd);
+    slot.pty.setCwd(cwd);
+    broadcastTerminalSessions();
   }
-  return { projectCwd, terminalRestarted, canceled: false };
+  return {
+    projectCwd: cwd,
+    sessionId: slot.meta.id,
+    terminalRestarted,
+    canceled: false,
+  };
 }
 
 function sendToRenderer(channel, payload) {
@@ -1896,7 +2113,10 @@ function focusMainTerminal(reason = "pick-or-deliver") {
     if (!mainWindow.isFocused()) mainWindow.focus();
     // BrowserView retains focus after pick clicks; reclaim for the shell renderer
     mainWindow.webContents.focus();
-    sendToRenderer("terminal:focus-request", { reason });
+    sendToRenderer("terminal:focus-request", {
+      reason,
+      sessionId: activeTerminalId,
+    });
   } catch (err) {
     console.warn("focusMainTerminal:", err);
   }
@@ -1964,33 +2184,43 @@ function registerIpc() {
     pending.resolve(envelope.selection || null);
   });
 
-  ipcMain.handle("app:get-state", () => ({
-    previewUrl,
-    previewStatus: previewStatusSnapshot(),
-    pickMode,
-    lastSelection,
-    lastScreenshotPath,
-    lastCaptureMeta,
-    captureDir: CAPTURE_DIR,
-    projectCwd,
-    recentPreviewUrls,
-    recentProjectCwds,
-    splitRatio,
-    previewCollapsed,
-    locale: uiLocale,
-    autoPasteTerminal,
-    frameMode: preferredFrameMode,
-    captureBusy: captureInFlight,
-    terminalAlive: Boolean(termSession?.isAlive()),
-    shellAlive: Boolean(termSession?.isAlive()),
-    terminalMode: termSession?.getMode() || null,
-    grokRunning: Boolean(termSession?.isGrokAlive()),
-    grokLaunchRequested: Boolean(termSession?.isGrokAlive()),
-    grokReady: termSession?.isGrokAlive() ? null : false,
-    grokReadiness: termSession?.isGrokAlive() ? "unknown" : "not-running",
-    grokState: termSession?.isGrokAlive() ? "running" : "idle",
-    layout: getLayoutBounds(),
-  }));
+  ipcMain.handle("app:get-state", () => {
+    const active = getActiveSlot();
+    const pty = active?.pty;
+    const terminals = sessionsSnapshot(
+      listTerminalRuntime(),
+      activeTerminalId,
+    );
+    return {
+      previewUrl,
+      previewStatus: previewStatusSnapshot(),
+      pickMode,
+      lastSelection,
+      lastScreenshotPath,
+      lastCaptureMeta,
+      captureDir: CAPTURE_DIR,
+      projectCwd: active?.meta.cwd || projectCwd,
+      recentPreviewUrls,
+      recentProjectCwds,
+      splitRatio,
+      previewCollapsed,
+      locale: uiLocale,
+      autoPasteTerminal,
+      frameMode: preferredFrameMode,
+      captureBusy: captureInFlight,
+      terminals,
+      activeTerminalId: terminals.activeId,
+      terminalAlive: Boolean(pty?.isAlive()),
+      shellAlive: Boolean(pty?.isAlive()),
+      terminalMode: pty?.getMode() || null,
+      grokRunning: Boolean(pty?.isGrokAlive()),
+      grokLaunchRequested: Boolean(pty?.isGrokAlive()),
+      grokReady: pty?.isGrokAlive() ? null : false,
+      grokReadiness: pty?.isGrokAlive() ? "unknown" : "not-running",
+      grokState: pty?.isGrokAlive() ? "running" : "idle",
+      layout: getLayoutBounds(),
+    };
+  });
 
   ipcMain.handle("app:set-locale", async (_e, next) => {
     const locale = setUiLocale(next);
@@ -2057,14 +2287,14 @@ function registerIpc() {
     let warning = null;
     if (on && !isPreviewCapturable()) {
       warning = actionableError({ code: "preview-not-ready" }).text;
-    } else if (on && !termSession?.isGrokAlive()) {
+    } else if (on && !getActiveSlot()?.pty?.isGrokAlive()) {
       warning = tr("main.pickWarningNoGrok");
     }
     await setPickMode(on);
     return {
       pickMode,
       warning,
-      terminalAlive: Boolean(termSession?.isAlive()),
+      terminalAlive: Boolean(getActiveSlot()?.pty?.isAlive()),
     };
   });
 
@@ -2175,23 +2405,46 @@ function registerIpc() {
     return { frameMode: preferredFrameMode };
   });
 
-  // —— Terminal ——
+  // —— Terminal (multi-session) ——
+  ipcMain.handle("terminal:list", async () => broadcastTerminalSessions());
+
+  ipcMain.handle("terminal:create", async (_e, opts = {}) => {
+    const cwd =
+      typeof opts.cwd === "string" && isDirectory(opts.cwd)
+        ? opts.cwd
+        : projectCwd;
+    const slot = createTerminalSlot({
+      cwd,
+      label: opts.label,
+      activate: opts.activate !== false,
+    });
+    return {
+      ok: true,
+      sessionId: slot.meta.id,
+      ...broadcastTerminalSessions(),
+    };
+  });
+
+  ipcMain.handle("terminal:close", async (_e, sessionId) => {
+    return closeTerminalSlot(sessionId);
+  });
+
+  ipcMain.handle("terminal:set-active", async (_e, sessionId) => {
+    return setActiveTerminal(sessionId);
+  });
+
   ipcMain.handle("terminal:start", async (_e, opts = {}) => {
-    const session = ensureTerminal();
+    const slot = ensureTerminal(opts.sessionId);
     const cols = opts.cols || 80;
     const rows = opts.rows || 24;
     try {
-      session.start({ cwd: projectCwd, cols, rows });
-      sendToRenderer("terminal:status", {
-        alive: true,
-        shellAlive: true,
-        terminalMode: "shell",
-        grokRunning: false,
-        grokLaunchRequested: false,
-        grokReady: false,
-        cwd: projectCwd,
-      });
-      return { ok: true, cwd: projectCwd };
+      slot.pty.start({ cwd: slot.meta.cwd, cols, rows });
+      emitTerminalStatus(slot);
+      return {
+        ok: true,
+        cwd: slot.meta.cwd,
+        sessionId: slot.meta.id,
+      };
     } catch (err) {
       const raw = err instanceof Error ? err.message : String(err);
       const guided = actionableError({
@@ -2199,43 +2452,53 @@ function registerIpc() {
         message: raw,
         detail: raw,
       });
-      sendToRenderer("terminal:status", {
-        alive: false,
-        error: guided.text,
-      });
+      emitTerminalStatus(slot, { alive: false, error: guided.text });
       throw new Error(guided.text);
     }
   });
 
-  ipcMain.handle("terminal:write", async (_e, data) => {
-    if (!termSession?.isAlive()) return { ok: false };
-    termSession.write(String(data ?? ""));
-    return { ok: true };
+  ipcMain.handle("terminal:write", async (_e, payload) => {
+    const opts =
+      payload && typeof payload === "object" && !Array.isArray(payload)
+        ? payload
+        : { data: payload };
+    const slot = getSlot(opts.sessionId);
+    if (!slot?.pty?.isAlive()) return { ok: false };
+    slot.pty.write(String(opts.data ?? ""));
+    return { ok: true, sessionId: slot.meta.id };
   });
 
-  ipcMain.handle("terminal:paste", async (_e, text) => {
-    if (!termSession?.isAlive()) {
+  ipcMain.handle("terminal:paste", async (_e, payload) => {
+    const opts =
+      payload && typeof payload === "object" && !Array.isArray(payload)
+        ? payload
+        : { text: payload };
+    const slot = getSlot(opts.sessionId);
+    if (!slot?.pty?.isAlive()) {
       throw new Error("Terminal not running");
     }
-    termSession.paste(String(text ?? ""));
-    return { ok: true };
+    slot.pty.paste(String(opts.text ?? ""));
+    return { ok: true, sessionId: slot.meta.id };
   });
 
-  ipcMain.handle("terminal:resize", async (_e, size) => {
-    if (!termSession) return { ok: false };
+  ipcMain.handle("terminal:resize", async (_e, size = {}) => {
+    const slot = getSlot(size.sessionId);
+    if (!slot) return { ok: false };
     const cols = size?.cols || 80;
     const rows = size?.rows || 24;
-    termSession.resize(cols, rows);
-    return { ok: true };
+    slot.pty.resize(cols, rows);
+    return { ok: true, sessionId: slot.meta.id };
   });
 
-  ipcMain.handle("terminal:launch-grok", async () => {
-    const session = ensureTerminal();
-    if (session.isGrokAlive()) {
+  ipcMain.handle("terminal:launch-grok", async (_e, opts = {}) => {
+    const slot = ensureTerminal(opts.sessionId);
+    if (opts.sessionId) setActiveTerminal(slot.meta.id);
+    if (slot.pty.isGrokAlive()) {
       return {
         ok: true,
         alreadyRunning: true,
-        cwd: projectCwd,
+        cwd: slot.meta.cwd,
+        sessionId: slot.meta.id,
         terminalMode: "grok",
         grokRunning: true,
         grokReady: null,
@@ -2249,31 +2512,26 @@ function registerIpc() {
       throw new Error(guided.text);
     }
     try {
-      sendToRenderer(
-        "terminal:data",
-        `\r\n\x1b[90m[Starting Grok directly in ${projectCwd}]\x1b[0m\r\n`,
-      );
-      const result = session.launchGrok({
-        cwd: projectCwd,
-        cols: session.cols,
-        rows: session.rows,
+      sendToRenderer("terminal:data", {
+        sessionId: slot.meta.id,
+        data: `\r\n\x1b[90m[Starting Grok directly in ${slot.meta.cwd}]\x1b[0m\r\n`,
       });
-      sendToRenderer("terminal:status", {
-        alive: true,
-        shellAlive: true,
-        terminalMode: "grok",
+      const result = slot.pty.launchGrok({
+        cwd: slot.meta.cwd,
+        cols: slot.pty.cols,
+        rows: slot.pty.rows,
+      });
+      emitTerminalStatus(slot, {
         grokRunning: true,
         grokLaunchRequested: true,
-        // Process liveness is known; whether the TUI prompt has accepted the
-        // image cannot be observed without parsing Grok's private UI state.
         grokReady: null,
         grokReadiness: "unknown",
         grokState: "running",
-        cwd: projectCwd,
       });
       return {
         ok: true,
-        cwd: projectCwd,
+        cwd: slot.meta.cwd,
+        sessionId: slot.meta.id,
         grokReady: null,
         grokReadiness: "unknown",
         grokState: "running",
@@ -2288,10 +2546,7 @@ function registerIpc() {
         message: raw,
         detail: raw,
       });
-      sendToRenderer("terminal:status", {
-        alive: Boolean(termSession?.isAlive()),
-        shellAlive: Boolean(termSession?.isAlive()),
-        terminalMode: termSession?.getMode() || null,
+      emitTerminalStatus(slot, {
         grokRunning: false,
         grokLaunchRequested: false,
         grokReady: false,
@@ -2302,22 +2557,14 @@ function registerIpc() {
   });
 
   ipcMain.handle("terminal:restart", async (_e, opts = {}) => {
-    const session = ensureTerminal();
-    session.start({
-      cwd: projectCwd,
-      cols: opts.cols || session.cols,
-      rows: opts.rows || session.rows,
+    const slot = ensureTerminal(opts.sessionId);
+    slot.pty.start({
+      cwd: slot.meta.cwd,
+      cols: opts.cols || slot.pty.cols,
+      rows: opts.rows || slot.pty.rows,
     });
-    sendToRenderer("terminal:status", {
-      alive: true,
-      shellAlive: true,
-      terminalMode: "shell",
-      grokRunning: false,
-      grokLaunchRequested: false,
-      grokReady: false,
-      cwd: projectCwd,
-    });
-    return { ok: true, cwd: projectCwd };
+    emitTerminalStatus(slot);
+    return { ok: true, cwd: slot.meta.cwd, sessionId: slot.meta.id };
   });
 }
 
@@ -2337,9 +2584,6 @@ app.on("before-quit", (event) => {
 });
 
 app.on("window-all-closed", () => {
-  if (termSession) {
-    termSession.dispose();
-    termSession = null;
-  }
+  disposeAllTerminals();
   if (process.platform !== "darwin") app.quit();
 });

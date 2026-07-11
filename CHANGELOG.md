@@ -2,6 +2,16 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.5.0] — 2026-07-11
+
+### Multi-terminal tabs
+
+1. **Multiple terminals** — open up to 6 independent PTY sessions in tabs (parallel projects).
+2. **Per-tab folder / Grok** — Folder and Start Grok apply to the **active** tab; each tab can run its own Grok.
+3. **Capture routing** — Aim / Frame / Re-send paste into the **active** terminal only.
+4. **Persisted tabs** — session list + active id saved in settings (shells restart on launch).
+5. **Tests** — `electron/terminal-hub.cjs` registry covered by unit tests.
+
 ## [0.4.7] — 2026-07-11
 
 ### Collapsible website preview

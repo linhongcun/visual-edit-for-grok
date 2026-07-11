@@ -77,6 +77,8 @@ function testRoundTrip() {
       splitRatio: 0.4,
       locale: "",
       previewCollapsed: false,
+      terminalSessions: [],
+      activeTerminalId: "",
       recentPreviewUrls: [
         "http://127.0.0.1:5173/foo",
         "https://example.com/app",

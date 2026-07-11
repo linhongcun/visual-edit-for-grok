@@ -1,6 +1,6 @@
 # Visual Capture for Grok
 
-**Version 0.4.7** · macOS (Apple Silicon)
+**Version 0.5.0** · macOS (Apple Silicon)
 
 Side-by-side workbench: **left = native Grok Build TUI**, **right = website preview**.  
 **Aim** or **Frame** a UI → the app attempts an image paste + grounded DOM-context write in Grok’s PTY. If Grok is not running, text + image stay on the clipboard.
@@ -14,10 +14,11 @@ image chip. Verify the prompt before submitting.
 ┌──────────────────────────────────────────────────────────────────┐
 │  Capture · Folder · Start Grok · Aim · Frame · Re-send           │
 ├────────────────────┬───┬─────────────────────────────────────────┤
-│  Grok · Terminal   │ ║ │  Preview · ← → ↻ · URL · Go · [Hide]    │
-│  (type intent)     │ ║ │  Website page (Aim / Frame target)      │
-└────────────────────┴───┴─────────────────────────────────────────┘
-  Hide preview → terminal full width; toolbar shows Preview to expand
+│  [proj-a] [proj-b] [+]  │ ║ │  Preview · ← → ↻ · URL · Go · [Hide] │
+│  Grok · Terminal tabs   │ ║ │  Website page (Aim / Frame target)   │
+│  (active tab gets paste)│ ║ │                                      │
+└─────────────────────────┴───┴──────────────────────────────────────┘
+  + adds another terminal (own folder / Grok). Hide preview → CLI full width.
 ```
 
 ---

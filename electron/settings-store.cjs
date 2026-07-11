@@ -23,6 +23,10 @@ const DEFAULTS = {
   locale: "",
   /** Hide website preview + URL chrome; terminal uses full width */
   previewCollapsed: false,
+  /** Multi-terminal tabs: [{ id, cwd, label, createdAt }] */
+  terminalSessions: [],
+  /** Active terminal tab id */
+  activeTerminalId: "",
   recentPreviewUrls: [],
   recentProjectCwds: [],
 };
@@ -57,6 +61,27 @@ function normalizeSettings(raw) {
   }
   if (typeof o.previewCollapsed === "boolean") {
     out.previewCollapsed = o.previewCollapsed;
+  }
+  if (Array.isArray(o.terminalSessions)) {
+    out.terminalSessions = o.terminalSessions
+      .filter((item) => item && typeof item === "object")
+      .map((item) => {
+        const row = /** @type {Record<string, unknown>} */ (item);
+        return {
+          id: typeof row.id === "string" ? row.id : "",
+          cwd: typeof row.cwd === "string" ? row.cwd : "",
+          label: typeof row.label === "string" ? row.label : "",
+          createdAt:
+            typeof row.createdAt === "number" && Number.isFinite(row.createdAt)
+              ? row.createdAt
+              : 0,
+        };
+      })
+      .filter((item) => item.id)
+      .slice(0, 6);
+  }
+  if (typeof o.activeTerminalId === "string") {
+    out.activeTerminalId = o.activeTerminalId.trim();
   }
   if (Array.isArray(o.recentPreviewUrls)) {
     out.recentPreviewUrls = Array.from(

@@ -308,7 +308,13 @@ async function run() {
 
     await shellClient.evaluate(`(() => {
       window.__vefgTestTerminal = "";
-      window.vefg.on("terminal:data", value => { window.__vefgTestTerminal += String(value || ""); });
+      window.vefg.on("terminal:data", value => {
+        if (value && typeof value === "object" && "data" in value) {
+          window.__vefgTestTerminal += String(value.data || "");
+        } else {
+          window.__vefgTestTerminal += String(value || "");
+        }
+      });
       return true;
     })()`);
     const switched = await shellClient.evaluate(

@@ -31,12 +31,37 @@ contextBridge.exposeInMainWorld("vefg", {
   setPreviewCollapsed: (collapsed) =>
     ipcRenderer.invoke("layout:set-preview-collapsed", Boolean(collapsed)),
 
-  terminalStart: (opts) => ipcRenderer.invoke("terminal:start", opts),
-  terminalWrite: (data) => ipcRenderer.invoke("terminal:write", data),
-  terminalPaste: (text) => ipcRenderer.invoke("terminal:paste", text),
-  terminalResize: (size) => ipcRenderer.invoke("terminal:resize", size),
-  terminalLaunchGrok: () => ipcRenderer.invoke("terminal:launch-grok"),
-  terminalRestart: (opts) => ipcRenderer.invoke("terminal:restart", opts),
+  terminalList: () => ipcRenderer.invoke("terminal:list"),
+  terminalCreate: (opts) =>
+    ipcRenderer.invoke("terminal:create", opts || {}),
+  terminalClose: (sessionId) =>
+    ipcRenderer.invoke("terminal:close", sessionId),
+  terminalSetActive: (sessionId) =>
+    ipcRenderer.invoke("terminal:set-active", sessionId),
+  terminalStart: (opts) => ipcRenderer.invoke("terminal:start", opts || {}),
+  terminalWrite: (dataOrOpts, sessionId) => {
+    if (dataOrOpts && typeof dataOrOpts === "object" && "data" in dataOrOpts) {
+      return ipcRenderer.invoke("terminal:write", dataOrOpts);
+    }
+    return ipcRenderer.invoke("terminal:write", {
+      data: dataOrOpts,
+      sessionId,
+    });
+  },
+  terminalPaste: (textOrOpts, sessionId) => {
+    if (textOrOpts && typeof textOrOpts === "object" && "text" in textOrOpts) {
+      return ipcRenderer.invoke("terminal:paste", textOrOpts);
+    }
+    return ipcRenderer.invoke("terminal:paste", {
+      text: textOrOpts,
+      sessionId,
+    });
+  },
+  terminalResize: (size) => ipcRenderer.invoke("terminal:resize", size || {}),
+  terminalLaunchGrok: (opts) =>
+    ipcRenderer.invoke("terminal:launch-grok", opts || {}),
+  terminalRestart: (opts) =>
+    ipcRenderer.invoke("terminal:restart", opts || {}),
 
   on: (channel, handler) => {
     const allowed = [
@@ -48,6 +73,7 @@ contextBridge.exposeInMainWorld("vefg", {
       "terminal:data",
       "terminal:exit",
       "terminal:status",
+      "terminal:sessions",
       "terminal:focus-request",
       "app:locale",
     ];

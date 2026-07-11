@@ -27,6 +27,8 @@ const TERM_FONT_FAMILY = [
 ].join(", ");
 
 interface Props {
+  /** Main-process terminal session id */
+  sessionId: string;
   active: boolean;
   /** Increment to force focus into the Grok/xterm input */
   focusNonce?: number;
@@ -35,6 +37,7 @@ interface Props {
 }
 
 export default function TerminalPane({
+  sessionId,
   active,
   focusNonce = 0,
   fitNonce = 0,
@@ -47,6 +50,11 @@ export default function TerminalPane({
   /** Single pending deferred focus timer — avoid multi-timeout storms */
   const focusTimerRef = useRef<number | null>(null);
   const resizeTimerRef = useRef<number | null>(null);
+  const sessionIdRef = useRef(sessionId);
+
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
 
   function clearFocusTimer() {
     if (focusTimerRef.current != null) {
@@ -111,7 +119,11 @@ export default function TerminalPane({
       if (!changed && !force) return;
       lastDimsRef.current = { cols, rows };
       if (startedRef.current && window.vefg) {
-        void window.vefg.terminalResize({ cols, rows });
+        void window.vefg.terminalResize({
+          cols,
+          rows,
+          sessionId: sessionIdRef.current,
+        });
       }
     } catch {
       /* ignore */
@@ -132,16 +144,14 @@ export default function TerminalPane({
   }
 
   useEffect(() => {
-    if (!hostRef.current || !window.vefg) return;
+    if (!hostRef.current || !window.vefg || !sessionId) return;
 
     const term = new Terminal({
       cursorBlink: true,
       fontSize: TERM_FONT_SIZE,
       fontFamily: TERM_FONT_FAMILY,
-      // Integer cell metrics reduce box-drawing drift with CJK double-width cells
       lineHeight: 1.2,
       letterSpacing: 0,
-      // Draw box-drawing / powerline glyphs on canvas for cleaner table borders
       customGlyphs: true,
       theme: {
         background: "#0a0c10",
@@ -170,13 +180,11 @@ export default function TerminalPane({
       scrollback: 8000,
       convertEol: false,
       windowsMode: false,
-      // Reduce glyph overlap artifacts that make table borders look “broken”
       rescaleOverlappingGlyphs: true,
     });
 
     const fit = new FitAddon();
     term.loadAddon(fit);
-    // Unicode 11 widths match modern TUI / CJK East Asian Width better than default v6
     const unicode11 = new Unicode11Addon();
     term.loadAddon(unicode11);
     term.unicode.activeVersion = "11";
@@ -188,7 +196,6 @@ export default function TerminalPane({
       }),
     );
     term.open(hostRef.current);
-    // WebGL renderer: crisper box-drawing; fall back to canvas if GPU path fails
     try {
       const webgl = new WebglAddon();
       webgl.onContextLoss(() => {
@@ -209,46 +216,63 @@ export default function TerminalPane({
     lastDimsRef.current = { cols: term.cols, rows: term.rows };
 
     const onData = window.vefg.on("terminal:data", (payload) => {
-      term.write(String(payload ?? ""));
+      if (typeof payload === "string") {
+        // Legacy single-terminal payload
+        term.write(payload);
+        return;
+      }
+      const p = payload as { sessionId?: string; data?: string };
+      if (p.sessionId && p.sessionId !== sessionIdRef.current) return;
+      term.write(String(p.data ?? ""));
     });
 
     const onExit = window.vefg.on("terminal:exit", (payload) => {
-      const { code } = payload as { code: number };
+      const p = payload as { sessionId?: string; code?: number };
+      if (p.sessionId && p.sessionId !== sessionIdRef.current) return;
+      const code = p.code ?? 0;
       term.writeln(
         `\r\n\x1b[90m[process exited: ${code}]  Use “Reset term” to restart.\x1b[0m\r\n`,
       );
       startedRef.current = false;
     });
 
-    // Main process is the owner of post-deliver focus; respond once per request
-    const onFocusReq = window.vefg.on("terminal:focus-request", () => {
+    const onFocusReq = window.vefg.on("terminal:focus-request", (payload) => {
+      const p = payload as { sessionId?: string | null };
+      if (p.sessionId && p.sessionId !== sessionIdRef.current) return;
       scheduleFocus();
     });
 
     term.onData((data) => {
-      void window.vefg.terminalWrite(data);
+      void window.vefg.terminalWrite({
+        data,
+        sessionId: sessionIdRef.current,
+      });
     });
 
     const start = async () => {
       fitAndSyncPty(true);
-      const dims = { cols: term.cols, rows: term.rows };
+      const dims = {
+        cols: term.cols,
+        rows: term.rows,
+        sessionId: sessionIdRef.current,
+      };
       try {
         await window.vefg.terminalStart(dims);
         startedRef.current = true;
-        // Second fit after layout paints (titlebar / split settle)
         requestAnimationFrame(() => fitAndSyncPty(true));
       } catch (err) {
         term.writeln(
           `\x1b[31mTerminal failed to start: ${err instanceof Error ? err.message : String(err)}\x1b[0m`,
         );
-        term.writeln("\x1b[90mFrom the project folder run: npm run rebuild\x1b[0m");
+        term.writeln(
+          "\x1b[90mFrom the project folder run: npm run rebuild\x1b[0m",
+        );
       }
     };
 
     void start();
 
     const ro = new ResizeObserver(() => {
-      // Debounce while dragging the splitter; still sync soon enough for live feel
       scheduleFit(false, 40);
     });
     ro.observe(hostRef.current);
@@ -263,40 +287,32 @@ export default function TerminalPane({
       term.dispose();
       termRef.current = null;
       fitRef.current = null;
+      startedRef.current = false;
     };
-  }, []);
+  }, [sessionId]);
 
   useEffect(() => {
     if (!active) return;
     requestAnimationFrame(() => fitAndSyncPty(true));
   }, [active]);
 
-  // Parent bumps focusNonce after Start Grok (not after every deliver — main owns that)
   useEffect(() => {
-    if (!focusNonce) return;
+    if (!focusNonce || !active) return;
     scheduleFocus();
     return () => clearFocusTimer();
-  }, [focusNonce]);
+  }, [focusNonce, active]);
 
-  // Splitter mouseup / keyboard resize / window layout settle
   useEffect(() => {
     if (!fitNonce) return;
-    // Double rAF: wait for CSS width to apply, then fit + SIGWINCH-equivalent
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        fitAndSyncPty(true);
-        // One more pass after fonts/layout settle (CJK mono fallback)
-        window.setTimeout(() => fitAndSyncPty(true), 80);
-      });
-    });
+    scheduleFit(true, 0);
   }, [fitNonce]);
 
   return (
     <div
-      className="terminal-host"
+      className={`terminal-host ${active ? "is-active" : "is-hidden"}`}
       ref={hostRef}
-      tabIndex={0}
-      aria-label="Interactive Grok terminal"
+      data-session-id={sessionId}
+      aria-hidden={!active}
     />
   );
 }

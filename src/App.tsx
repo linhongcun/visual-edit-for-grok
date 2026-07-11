@@ -142,6 +142,18 @@ export default function App() {
   const previewCollapsedRef = useRef(false);
   const [terminalAlive, setTerminalAlive] = useState(false);
   const [grokState, setGrokState] = useState<GrokRuntimeState>("idle");
+  type TermTab = {
+    id: string;
+    cwd: string;
+    label: string;
+    shellAlive?: boolean;
+    grokRunning?: boolean;
+    mode?: string | null;
+  };
+  const [termTabs, setTermTabs] = useState<TermTab[]>([]);
+  const [activeTermId, setActiveTermId] = useState<string | null>(null);
+  const activeTermIdRef = useRef<string | null>(null);
+  const [maxTermSessions, setMaxTermSessions] = useState(6);
   const [frameMode, setFrameMode] = useState<FrameMode>("viewport");
   const [receipt, setReceipt] = useState<CaptureReceipt | null>(null);
   const [receiptThumbnail, setReceiptThumbnail] = useState<string | null>(null);
@@ -176,6 +188,39 @@ export default function App() {
   useEffect(() => {
     previewCollapsedRef.current = previewCollapsed;
   }, [previewCollapsed]);
+
+  useEffect(() => {
+    activeTermIdRef.current = activeTermId;
+  }, [activeTermId]);
+
+  function applyTerminalSessions(payload: unknown) {
+    const p = payload as {
+      sessions?: TermTab[];
+      activeId?: string | null;
+      maxSessions?: number;
+    };
+    const sessions = Array.isArray(p.sessions) ? p.sessions : [];
+    setTermTabs(sessions);
+    if (typeof p.maxSessions === "number" && p.maxSessions > 0) {
+      setMaxTermSessions(p.maxSessions);
+    }
+    const nextActive =
+      p.activeId && sessions.some((s) => s.id === p.activeId)
+        ? p.activeId
+        : sessions[0]?.id || null;
+    setActiveTermId(nextActive);
+    activeTermIdRef.current = nextActive;
+    const active = sessions.find((s) => s.id === nextActive);
+    if (active) {
+      setProjectCwd(active.cwd || "");
+      setTerminalAlive(Boolean(active.shellAlive));
+      if (active.grokRunning) {
+        setGrokState((cur) => (cur === "ready" ? "ready" : "launch-requested"));
+      } else if (!active.shellAlive) {
+        setGrokState((cur) => (cur === "idle" ? "idle" : "exited"));
+      }
+    }
+  }
 
   useEffect(() => {
     screenshotPathRef.current = screenshotPath;
@@ -365,13 +410,17 @@ export default function App() {
         setProjectCwd(s.projectCwd || "");
         setRecentPreviewUrls(s.recentPreviewUrls || []);
         setRecentProjectCwds(s.recentProjectCwds || []);
-        applyTerminalRuntime({
-          alive: s.terminalAlive,
-          shellAlive: s.shellAlive,
-          grokLaunchRequested: s.grokLaunchRequested,
-          grokReady: s.grokReady,
-          grokState: s.grokState,
-        });
+        if (s.terminals) {
+          applyTerminalSessions(s.terminals);
+        } else {
+          applyTerminalRuntime({
+            alive: s.terminalAlive,
+            shellAlive: s.shellAlive,
+            grokLaunchRequested: s.grokLaunchRequested,
+            grokReady: s.grokReady,
+            grokState: s.grokState,
+          });
+        }
         setCaptureBusy(Boolean(s.captureBusy));
         setFrameMode(s.frameMode || "viewport");
         if (s.layout?.terminalWidth) setTerminalWidth(s.layout.terminalWidth);
@@ -440,12 +489,20 @@ export default function App() {
           setTerminalWidth(b.terminalWidth);
         }
       }),
-      api.on("terminal:exit", () => {
+      api.on("terminal:exit", (p) => {
+        const st = p as { sessionId?: string };
+        if (st.sessionId && st.sessionId !== activeTermIdRef.current) return;
         setTerminalAlive(false);
         setGrokState((current) => (current === "idle" ? "idle" : "exited"));
       }),
       api.on("terminal:status", (p) => {
-        applyTerminalRuntime(p as TerminalStatus);
+        const st = p as TerminalStatus & { sessionId?: string };
+        if (st.sessionId && st.sessionId !== activeTermIdRef.current) return;
+        applyTerminalRuntime(st);
+        if (typeof st.cwd === "string" && st.cwd) setProjectCwd(st.cwd);
+      }),
+      api.on("terminal:sessions", (p) => {
+        applyTerminalSessions(p);
       }),
       api.on("capture:busy", (p) => {
         const st = p as { busy?: boolean };
@@ -739,7 +796,9 @@ export default function App() {
     lastLaunchAtRef.current = now;
     setGrokState("launching");
     try {
-      const result = await window.vefg.terminalLaunchGrok();
+      const result = await window.vefg.terminalLaunchGrok({
+        sessionId: activeTermIdRef.current || undefined,
+      });
       applyTerminalRuntime({
         ...result,
         shellAlive: result.shellAlive ?? result.terminalAlive ?? true,
@@ -759,11 +818,61 @@ export default function App() {
   async function onRestartTerminal() {
     if (!isElectron()) return;
     try {
-      await window.vefg.terminalRestart({});
+      await window.vefg.terminalRestart({
+        sessionId: activeTermIdRef.current || undefined,
+      });
       setTerminalAlive(true);
       setGrokState("idle");
       lastLaunchAtRef.current = 0;
       showToast(tr("toast.shellRestarted"));
+    } catch (err) {
+      toastError(err);
+    }
+  }
+
+  async function onSelectTerminal(sessionId: string) {
+    if (!isElectron() || !sessionId || sessionId === activeTermIdRef.current) {
+      return;
+    }
+    try {
+      const snap = await window.vefg.terminalSetActive(sessionId);
+      applyTerminalSessions(snap);
+      requestAnimationFrame(() => requestTerminalFit());
+      focusGrokTerminal();
+    } catch (err) {
+      toastError(err);
+    }
+  }
+
+  async function onNewTerminal() {
+    if (!isElectron()) return;
+    if (termTabs.length >= maxTermSessions) {
+      showToast(tr("term.maxSessions", { max: maxTermSessions }));
+      return;
+    }
+    try {
+      const snap = await window.vefg.terminalCreate({
+        cwd: projectCwd || undefined,
+        activate: true,
+      });
+      applyTerminalSessions(snap);
+      requestAnimationFrame(() => requestTerminalFit());
+      showToast(tr("term.created"));
+    } catch (err) {
+      toastError(err);
+    }
+  }
+
+  async function onCloseTerminal(sessionId: string) {
+    if (!isElectron() || !sessionId) return;
+    if (termTabs.length <= 1) {
+      showToast(tr("term.keepOne"));
+      return;
+    }
+    try {
+      const snap = await window.vefg.terminalClose(sessionId);
+      applyTerminalSessions(snap);
+      requestAnimationFrame(() => requestTerminalFit());
     } catch (err) {
       toastError(err);
     }
@@ -1340,16 +1449,94 @@ export default function App() {
           style={terminalPaneStyle}
           aria-label={tr("pane.terminalAria")}
         >
-          <div className="pane-label">
-            <span>{tr("pane.terminal")}</span>
-            <span className="pane-hint">{tr("pane.terminalHint")}</span>
+          <div className="term-tabs" role="tablist" aria-label={tr("term.tabsAria")}>
+            {(termTabs.length
+              ? termTabs
+              : activeTermId
+                ? [
+                    {
+                      id: activeTermId,
+                      cwd: projectCwd,
+                      label: projectCwd
+                        ? projectCwd.split(/[/\\]/).pop() || "Terminal"
+                        : "Terminal",
+                    },
+                  ]
+                : []
+            ).map((tab) => {
+              const selected = tab.id === activeTermId;
+              return (
+                <div
+                  key={tab.id}
+                  className={`term-tab ${selected ? "active" : ""} ${tab.grokRunning ? "grok" : ""}`}
+                  role="tab"
+                  aria-selected={selected}
+                  title={tab.cwd || tab.label}
+                >
+                  <button
+                    type="button"
+                    className="term-tab-main"
+                    onClick={() => void onSelectTerminal(tab.id)}
+                  >
+                    <span className="term-tab-label">{tab.label || "Terminal"}</span>
+                    {tab.grokRunning ? (
+                      <span className="term-tab-badge">Grok</span>
+                    ) : null}
+                  </button>
+                  {termTabs.length > 1 ? (
+                    <button
+                      type="button"
+                      className="term-tab-close"
+                      title={tr("term.closeTitle")}
+                      aria-label={tr("term.closeAria", { name: tab.label })}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void onCloseTerminal(tab.id);
+                      }}
+                    >
+                      ×
+                    </button>
+                  ) : null}
+                </div>
+              );
+            })}
+            <button
+              type="button"
+              className="term-tab-add"
+              onClick={() => void onNewTerminal()}
+              disabled={termTabs.length >= maxTermSessions}
+              title={tr("term.addTitle")}
+              aria-label={tr("term.addAria")}
+            >
+              +
+            </button>
+            <span className="term-tabs-hint">{tr("pane.terminalHint")}</span>
           </div>
           <div className="terminal-body terminal-body-full">
-            <TerminalPane
-              active
-              focusNonce={termFocusNonce}
-              fitNonce={termFitNonce}
-            />
+            {termTabs.length === 0 && activeTermId ? (
+              <TerminalPane
+                sessionId={activeTermId}
+                active
+                focusNonce={termFocusNonce}
+                fitNonce={termFitNonce}
+              />
+            ) : null}
+            {termTabs.map((tab) => (
+              <div
+                key={tab.id}
+                className={`terminal-stack ${tab.id === activeTermId ? "is-active" : "is-hidden"}`}
+                hidden={tab.id !== activeTermId}
+              >
+                <TerminalPane
+                  sessionId={tab.id}
+                  active={tab.id === activeTermId}
+                  focusNonce={
+                    tab.id === activeTermId ? termFocusNonce : 0
+                  }
+                  fitNonce={tab.id === activeTermId ? termFitNonce : 0}
+                />
+              </div>
+            ))}
           </div>
         </section>
 
