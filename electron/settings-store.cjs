@@ -21,13 +21,15 @@ const DEFAULTS = {
   splitRatio: 0.52,
   /** UI language: "en" | "zh" (empty means detect on first run) */
   locale: "",
+  /** Hide website preview + URL chrome; terminal uses full width */
+  previewCollapsed: false,
   recentPreviewUrls: [],
   recentProjectCwds: [],
 };
 
 /**
  * @param {unknown} raw
- * @returns {{ settingsVersion: number, previewUrl: string, projectCwd: string, splitRatio: number, locale: string, recentPreviewUrls: string[], recentProjectCwds: string[] }}
+ * @returns {{ settingsVersion: number, previewUrl: string, projectCwd: string, splitRatio: number, locale: string, previewCollapsed: boolean, recentPreviewUrls: string[], recentProjectCwds: string[] }}
  */
 function normalizeSettings(raw) {
   const out = { ...DEFAULTS };
@@ -53,6 +55,9 @@ function normalizeSettings(raw) {
     else if (loc.startsWith("en")) out.locale = "en";
     else if (loc === "") out.locale = "";
   }
+  if (typeof o.previewCollapsed === "boolean") {
+    out.previewCollapsed = o.previewCollapsed;
+  }
   if (Array.isArray(o.recentPreviewUrls)) {
     out.recentPreviewUrls = Array.from(
       new Set(
@@ -76,7 +81,7 @@ function normalizeSettings(raw) {
 
 /**
  * @param {string} filePath
- * @returns {{ settingsVersion: number, previewUrl: string, projectCwd: string, splitRatio: number, locale: string, recentPreviewUrls: string[], recentProjectCwds: string[] }}
+ * @returns {{ settingsVersion: number, previewUrl: string, projectCwd: string, splitRatio: number, locale: string, previewCollapsed: boolean, recentPreviewUrls: string[], recentProjectCwds: string[] }}
  */
 function loadSettings(filePath) {
   try {
@@ -90,8 +95,8 @@ function loadSettings(filePath) {
 
 /**
  * @param {string} filePath
- * @param {Partial<{ settingsVersion: number, previewUrl: string, projectCwd: string, splitRatio: number, locale: string, recentPreviewUrls: string[], recentProjectCwds: string[] }>} partial
- * @returns {{ settingsVersion: number, previewUrl: string, projectCwd: string, splitRatio: number, locale: string, recentPreviewUrls: string[], recentProjectCwds: string[] }}
+ * @param {Partial<{ settingsVersion: number, previewUrl: string, projectCwd: string, splitRatio: number, locale: string, previewCollapsed: boolean, recentPreviewUrls: string[], recentProjectCwds: string[] }>} partial
+ * @returns {{ settingsVersion: number, previewUrl: string, projectCwd: string, splitRatio: number, locale: string, previewCollapsed: boolean, recentPreviewUrls: string[], recentProjectCwds: string[] }}
  */
 function saveSettings(filePath, partial = {}) {
   const prev = loadSettings(filePath);

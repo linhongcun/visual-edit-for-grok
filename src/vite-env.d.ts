@@ -22,6 +22,7 @@ export interface VefgApi {
     recentPreviewUrls?: string[];
     recentProjectCwds?: string[];
     splitRatio: number;
+    previewCollapsed?: boolean;
     autoPasteTerminal: boolean;
     frameMode?: FrameMode;
     locale?: "en" | "zh" | string;
@@ -91,6 +92,7 @@ export interface VefgApi {
     ratio: number,
     opts?: { force?: boolean; persist?: boolean },
   ) => Promise<LayoutBounds>;
+  setPreviewCollapsed: (collapsed: boolean) => Promise<LayoutBounds>;
   terminalStart: (opts?: {
     cols?: number;
     rows?: number;

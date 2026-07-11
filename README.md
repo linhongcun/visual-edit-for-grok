@@ -1,6 +1,6 @@
 # Visual Capture for Grok
 
-**Version 0.4.6** · macOS (Apple Silicon)
+**Version 0.4.7** · macOS (Apple Silicon)
 
 Side-by-side workbench: **left = native Grok Build TUI**, **right = website preview**.  
 **Aim** or **Frame** a UI → the app attempts an image paste + grounded DOM-context write in Grok’s PTY. If Grok is not running, text + image stay on the clipboard.
@@ -12,11 +12,12 @@ image chip. Verify the prompt before submitting.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│  Capture · URL · Folder · Start Grok · Aim · Frame · Re-send     │
+│  Capture · Folder · Start Grok · Aim · Frame · Re-send           │
 ├────────────────────┬───┬─────────────────────────────────────────┤
-│  Grok · Terminal   │ ║ │  Website preview                        │
-│  (type intent)     │ ║ │  Aim / Frame → capture for Grok         │
+│  Grok · Terminal   │ ║ │  Preview · ← → ↻ · URL · Go · [Hide]    │
+│  (type intent)     │ ║ │  Website page (Aim / Frame target)      │
 └────────────────────┴───┴─────────────────────────────────────────┘
+  Hide preview → terminal full width; toolbar shows Preview to expand
 ```
 
 ---
@@ -107,7 +108,8 @@ While a capture is in flight, Aim / Frame / Re-send are disabled (**single-fligh
 | Single-flight | Concurrent Aim / Frame / Re-send cannot double-paste |
 | Pick consistency | Busy reject cancels Aim + clears highlight; selection+shot committed only on full success |
 | Status honesty | PTY/Grok process split, attempted vs confirmed delivery, clipboard fallback + manual ⌘V guidance |
-| Persistence | Preview URL/history, project cwd/history and split ratio in Electron `userData`; first run and legacy demo-default upgrades open a bundled guide |
+| Persistence | Preview URL/history, project cwd/history, split ratio, and **preview collapsed** flag in Electron `userData`; first run and legacy demo-default upgrades open a bundled guide |
+| Collapsible preview | Hide website + URL chrome for CLI-only focus; Aim/Frame auto-expand |
 | Capture cleanup | Newest ~80 files / 7 days under `~/.grok/visual-edit-captures/` (throttled, off hot path) |
 | Splitter | Live layout; settings disk write debounced (flush on mouseup) |
 | Focus handoff | After successful auto-deliver, focus returns to Grok terminal |

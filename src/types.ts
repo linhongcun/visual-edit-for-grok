@@ -139,11 +139,14 @@ export interface CaptureResult {
 
 export interface LayoutBounds {
   toolbarHeight: number;
+  previewChromeHeight?: number;
   terminalWidth: number;
   previewWidth: number;
   contentWidth: number;
   contentHeight: number;
   splitRatio: number;
+  previewCollapsed?: boolean;
+  splitterVisible?: boolean;
 }
 
 /** Props offered in the style-diff editor (match computedStyle keys). */

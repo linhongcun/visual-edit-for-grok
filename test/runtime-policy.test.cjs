@@ -20,6 +20,7 @@ const {
   operatorActionState,
   planAimPickEvent,
   resolvePickCommit,
+  computeWorkspaceLayout,
   DEFAULT_CLEANUP_MIN_INTERVAL_MS,
   DEFAULT_SETTINGS_DEBOUNCE_MS,
 } = require("../electron/runtime-policy.cjs");
@@ -590,6 +591,48 @@ function testClassifyGrokUiStateNeverPromotesRequestedToReady() {
   );
 }
 
+function testWorkspaceLayoutSplitLeavesRoomForPreview() {
+  const layout = computeWorkspaceLayout({
+    contentWidth: 1400,
+    contentHeight: 900,
+    toolbarHeight: 96,
+    previewChromeHeight: 40,
+    splitRatio: 0.5,
+    previewCollapsed: false,
+    minTerminalWidth: 400,
+    minPreviewWidth: 320,
+    splitterWidth: 5,
+  });
+  assert.strictEqual(layout.previewCollapsed, false);
+  assert.strictEqual(layout.splitterVisible, true);
+  assert.ok(layout.terminalWidth >= 400);
+  assert.ok(layout.previewWidth >= 320);
+  assert.strictEqual(
+    layout.terminalWidth + 5 + layout.previewWidth,
+    1400,
+  );
+  assert.strictEqual(layout.previewY, 136);
+  assert.strictEqual(layout.previewBrowserHeight, 900 - 136);
+  assert.strictEqual(layout.previewX, layout.terminalWidth + 5);
+}
+
+function testWorkspaceLayoutCollapsedGivesTerminalFullWidth() {
+  const layout = computeWorkspaceLayout({
+    contentWidth: 1400,
+    contentHeight: 900,
+    toolbarHeight: 96,
+    previewChromeHeight: 40,
+    splitRatio: 0.5,
+    previewCollapsed: true,
+  });
+  assert.strictEqual(layout.previewCollapsed, true);
+  assert.strictEqual(layout.splitterVisible, false);
+  assert.strictEqual(layout.terminalWidth, 1400);
+  assert.strictEqual(layout.previewWidth, 0);
+  assert.strictEqual(layout.previewX, 1400);
+  assert.strictEqual(layout.previewY, 136);
+}
+
 function run() {
   const tests = [
     testCanStartWhenIdle,
@@ -636,6 +679,8 @@ function run() {
     testCommitFrameOnlyUpdatesShotKeepsPrevSelection,
     testStrictFrameCommitClearsStaleSelectionForNewShot,
     testBusyRejectThenFailureNeverPairsNewDomWithOldShot,
+    testWorkspaceLayoutSplitLeavesRoomForPreview,
+    testWorkspaceLayoutCollapsedGivesTerminalFullWidth,
   ];
   let failed = 0;
   for (const t of tests) {

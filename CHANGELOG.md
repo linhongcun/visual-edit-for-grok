@@ -2,6 +2,16 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.4.7] — 2026-07-11
+
+### Collapsible website preview
+
+1. **Collapse preview** — hide the right website pane so the Grok terminal uses full width (for CLI-only work).
+2. **URL chrome grouped with the page** — back / forward / reload / URL / Go live in a preview header; collapsing hides them together.
+3. **Expand control** — toolbar **Preview** button when collapsed; Aim / Frame auto-expand the pane.
+4. **Persisted** — `previewCollapsed` in settings; BrowserView bounds go to zero when collapsed.
+5. **Tests** — `computeWorkspaceLayout` + settings round-trip for `previewCollapsed`.
+
 ## [0.4.6] — 2026-07-11
 
 ### Operator polish (actionable errors, quit safety)

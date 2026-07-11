@@ -725,6 +725,112 @@ function operatorActionState(state = {}) {
 }
 
 /**
+ * Pure workspace split for terminal vs website preview.
+ * When preview is collapsed, terminal owns the full content width and
+ * the native BrowserView should be zero-sized / hidden.
+ *
+ * @param {{
+ *   contentWidth: number,
+ *   contentHeight?: number,
+ *   toolbarHeight?: number,
+ *   previewChromeHeight?: number,
+ *   splitRatio?: number,
+ *   previewCollapsed?: boolean,
+ *   minTerminalWidth?: number,
+ *   minPreviewWidth?: number,
+ *   splitterWidth?: number,
+ * }} input
+ * @returns {{
+ *   terminalWidth: number,
+ *   previewWidth: number,
+ *   previewX: number,
+ *   previewY: number,
+ *   previewBrowserHeight: number,
+ *   splitterVisible: boolean,
+ *   previewCollapsed: boolean,
+ *   splitRatio: number,
+ * }}
+ */
+function computeWorkspaceLayout(input = {}) {
+  const contentWidth = Math.max(0, Math.round(Number(input.contentWidth) || 0));
+  const contentHeight = Math.max(
+    0,
+    Math.round(Number(input.contentHeight) || 0),
+  );
+  const toolbarHeight = Math.max(0, Math.round(Number(input.toolbarHeight) || 0));
+  const previewChromeHeight = Math.max(
+    0,
+    Math.round(Number(input.previewChromeHeight) || 0),
+  );
+  const splitterWidth = Math.max(
+    0,
+    Math.round(Number(input.splitterWidth) || 5),
+  );
+  const minTerminalWidth = Math.max(
+    1,
+    Math.round(Number(input.minTerminalWidth) || 400),
+  );
+  const minPreviewWidth = Math.max(
+    1,
+    Math.round(Number(input.minPreviewWidth) || 320),
+  );
+  let splitRatio = Number(input.splitRatio);
+  if (!Number.isFinite(splitRatio)) splitRatio = 0.52;
+  splitRatio = Math.min(0.75, Math.max(0.22, splitRatio));
+  const previewCollapsed = Boolean(input.previewCollapsed);
+
+  const previewY = toolbarHeight + previewChromeHeight;
+  const previewBrowserHeight = Math.max(0, contentHeight - previewY);
+
+  if (previewCollapsed || contentWidth <= 0) {
+    return {
+      terminalWidth: contentWidth,
+      previewWidth: 0,
+      previewX: contentWidth,
+      previewY,
+      previewBrowserHeight,
+      splitterVisible: false,
+      previewCollapsed: true,
+      splitRatio,
+    };
+  }
+
+  let terminalWidth = Math.round(contentWidth * splitRatio);
+  const maxTerminal = Math.max(
+    minTerminalWidth,
+    contentWidth - minPreviewWidth - splitterWidth,
+  );
+  terminalWidth = Math.max(
+    minTerminalWidth,
+    Math.min(terminalWidth, maxTerminal),
+  );
+  // Extremely narrow windows: prefer terminal over forcing a broken dual pane
+  if (contentWidth < minTerminalWidth + minPreviewWidth + splitterWidth) {
+    terminalWidth = Math.max(
+      Math.min(minTerminalWidth, contentWidth),
+      contentWidth - minPreviewWidth - splitterWidth,
+    );
+    terminalWidth = Math.max(0, Math.min(contentWidth, terminalWidth));
+  }
+
+  const previewWidth = Math.max(
+    0,
+    contentWidth - terminalWidth - splitterWidth,
+  );
+
+  return {
+    terminalWidth,
+    previewWidth,
+    previewX: terminalWidth + splitterWidth,
+    previewY,
+    previewBrowserHeight,
+    splitterVisible: previewWidth > 0,
+    previewCollapsed: false,
+    splitRatio: contentWidth > 0 ? terminalWidth / contentWidth : splitRatio,
+  };
+}
+
+/**
  * Plan reaction when Aim emits a DOM selection while capture may be in flight.
  * Picker page has already exited pickMode locally; main must stay consistent:
  * busy reject still cancels Aim UI and clears sticky highlight.
@@ -845,6 +951,7 @@ module.exports = {
   shouldFlushSettings,
   focusHandoffDelays,
   operatorActionState,
+  computeWorkspaceLayout,
   planAimPickEvent,
   resolvePickCommit,
 };

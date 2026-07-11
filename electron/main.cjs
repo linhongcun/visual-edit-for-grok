@@ -45,6 +45,7 @@ const {
   planFrameCapture,
   evaluateSelectionStability,
   resolvePickCommit,
+  computeWorkspaceLayout,
   DEFAULT_CLEANUP_MIN_INTERVAL_MS,
   DEFAULT_SETTINGS_DEBOUNCE_MS,
 } = require("./runtime-policy.cjs");
@@ -115,6 +116,9 @@ function applyLoadedSettings() {
     projectCwd = s.projectCwd;
   }
   if (typeof s.splitRatio === "number") splitRatio = s.splitRatio;
+  if (typeof s.previewCollapsed === "boolean") {
+    previewCollapsed = s.previewCollapsed;
+  }
   // Empty locale = first run → detect system language and persist
   if (s.locale === "en" || s.locale === "zh") {
     uiLocale = s.locale;
@@ -244,8 +248,10 @@ function setUiLocale(next) {
 }
 
 const isDev = process.env.VEFG_DEV === "1";
-// Keep in sync with src/styles.css --toolbar-height
+// Keep in sync with src/styles.css --toolbar-height / --preview-chrome-height
 const TOOLBAR_HEIGHT = 96;
+/** URL + nav controls live in the preview pane chrome (collapse with page) */
+const PREVIEW_CHROME_HEIGHT = 40;
 const SPLITTER_WIDTH = 5;
 // Wider floor so Grok TUI tables keep more columns when the split is tight
 const MIN_TERMINAL_WIDTH = 400;
@@ -285,6 +291,8 @@ let lastScreenshotPath = null;
 let lastCaptureMeta = null;
 /** Left pane ratio 0–1 */
 let splitRatio = 0.52;
+/** Hide preview BrowserView + URL chrome; terminal uses full width */
+let previewCollapsed = false;
 /** @type {"en" | "zh"} */
 let uiLocale = "en";
 let projectCwd = defaultProjectCwd();
@@ -953,64 +961,100 @@ function createPreviewView() {
 
 function getLayoutBounds() {
   if (!mainWindow) {
-    return {
-      toolbarHeight: TOOLBAR_HEIGHT,
-      terminalWidth: 600,
-      previewWidth: 600,
+    const layout = computeWorkspaceLayout({
       contentWidth: 1200,
       contentHeight: 800,
+      toolbarHeight: TOOLBAR_HEIGHT,
+      previewChromeHeight: PREVIEW_CHROME_HEIGHT,
       splitRatio,
+      previewCollapsed,
+      minTerminalWidth: MIN_TERMINAL_WIDTH,
+      minPreviewWidth: MIN_PREVIEW_WIDTH,
+      splitterWidth: SPLITTER_WIDTH,
+    });
+    return {
+      toolbarHeight: TOOLBAR_HEIGHT,
+      previewChromeHeight: PREVIEW_CHROME_HEIGHT,
+      terminalWidth: layout.terminalWidth,
+      previewWidth: layout.previewWidth,
+      contentWidth: 1200,
+      contentHeight: 800,
+      splitRatio: layout.splitRatio,
+      previewCollapsed: layout.previewCollapsed,
+      splitterVisible: layout.splitterVisible,
     };
   }
   const [width, height] = mainWindow.getContentSize();
-  const { terminalWidth, previewWidth } = computeSplit(width);
-  return {
-    toolbarHeight: TOOLBAR_HEIGHT,
-    terminalWidth,
-    previewWidth,
+  const layout = computeWorkspaceLayout({
     contentWidth: width,
     contentHeight: height,
+    toolbarHeight: TOOLBAR_HEIGHT,
+    previewChromeHeight: PREVIEW_CHROME_HEIGHT,
     splitRatio,
+    previewCollapsed,
+    minTerminalWidth: MIN_TERMINAL_WIDTH,
+    minPreviewWidth: MIN_PREVIEW_WIDTH,
+    splitterWidth: SPLITTER_WIDTH,
+  });
+  return {
+    toolbarHeight: TOOLBAR_HEIGHT,
+    previewChromeHeight: PREVIEW_CHROME_HEIGHT,
+    terminalWidth: layout.terminalWidth,
+    previewWidth: layout.previewWidth,
+    contentWidth: width,
+    contentHeight: height,
+    splitRatio: layout.splitRatio,
+    previewCollapsed: layout.previewCollapsed,
+    splitterVisible: layout.splitterVisible,
   };
-}
-
-function computeSplit(width) {
-  let terminalWidth = Math.round(width * splitRatio);
-  terminalWidth = Math.max(
-    MIN_TERMINAL_WIDTH,
-    Math.min(terminalWidth, width - MIN_PREVIEW_WIDTH - SPLITTER_WIDTH),
-  );
-  const previewWidth = Math.max(
-    MIN_PREVIEW_WIDTH,
-    width - terminalWidth - SPLITTER_WIDTH,
-  );
-  return { terminalWidth, previewWidth };
 }
 
 function layoutViews() {
   if (!mainWindow || !previewView) return;
   const [width, height] = mainWindow.getContentSize();
-  const { terminalWidth, previewWidth } = computeSplit(width);
-  const y = TOOLBAR_HEIGHT;
-  const h = Math.max(120, height - TOOLBAR_HEIGHT);
-
-  // Preview sits on the right; left is free for xterm in the renderer
-  previewView.setBounds({
-    x: terminalWidth + SPLITTER_WIDTH,
-    y,
-    width: previewWidth,
-    height: h,
+  const layout = computeWorkspaceLayout({
+    contentWidth: width,
+    contentHeight: height,
+    toolbarHeight: TOOLBAR_HEIGHT,
+    previewChromeHeight: PREVIEW_CHROME_HEIGHT,
+    splitRatio,
+    previewCollapsed,
+    minTerminalWidth: MIN_TERMINAL_WIDTH,
+    minPreviewWidth: MIN_PREVIEW_WIDTH,
+    splitterWidth: SPLITTER_WIDTH,
   });
+
+  // Preview sits under its own URL chrome on the right; collapsed → hide view
+  if (layout.previewCollapsed || layout.previewWidth <= 0) {
+    previewView.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+  } else {
+    previewView.setBounds({
+      x: layout.previewX,
+      y: layout.previewY,
+      width: layout.previewWidth,
+      height: Math.max(120, layout.previewBrowserHeight),
+    });
+  }
   previewView.setAutoResize({ width: false, height: false });
 
   sendToRenderer("layout:bounds", {
     toolbarHeight: TOOLBAR_HEIGHT,
-    terminalWidth,
-    previewWidth,
+    previewChromeHeight: PREVIEW_CHROME_HEIGHT,
+    terminalWidth: layout.terminalWidth,
+    previewWidth: layout.previewWidth,
     contentWidth: width,
     contentHeight: height,
-    splitRatio: terminalWidth / width,
+    splitRatio: layout.splitRatio,
+    previewCollapsed: layout.previewCollapsed,
+    splitterVisible: layout.splitterVisible,
   });
+}
+
+function setPreviewCollapsed(next, { forcePersist = true } = {}) {
+  previewCollapsed = Boolean(next);
+  persistDebounced({ previewCollapsed }, { force: forcePersist });
+  layoutViews();
+  return getLayoutBounds();
 }
 
 async function setPickMode(enabled) {
@@ -1932,6 +1976,7 @@ function registerIpc() {
     recentPreviewUrls,
     recentProjectCwds,
     splitRatio,
+    previewCollapsed,
     locale: uiLocale,
     autoPasteTerminal,
     frameMode: preferredFrameMode,
@@ -1961,6 +2006,10 @@ function registerIpc() {
     persistDebounced({ splitRatio }, { force });
     layoutViews();
     return getLayoutBounds();
+  });
+
+  ipcMain.handle("layout:set-preview-collapsed", async (_e, collapsed) => {
+    return setPreviewCollapsed(Boolean(collapsed), { forcePersist: true });
   });
 
   ipcMain.handle("project:pick-cwd", async () => {

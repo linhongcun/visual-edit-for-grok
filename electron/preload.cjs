@@ -28,6 +28,8 @@ contextBridge.exposeInMainWorld("vefg", {
   setProjectDir: (cwd) => ipcRenderer.invoke("project:set-cwd", cwd),
   setSplit: (ratio, opts) =>
     ipcRenderer.invoke("layout:set-split", ratio, opts || {}),
+  setPreviewCollapsed: (collapsed) =>
+    ipcRenderer.invoke("layout:set-preview-collapsed", Boolean(collapsed)),
 
   terminalStart: (opts) => ipcRenderer.invoke("terminal:start", opts),
   terminalWrite: (data) => ipcRenderer.invoke("terminal:write", data),

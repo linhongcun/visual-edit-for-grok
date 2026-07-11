@@ -15,6 +15,8 @@ import {
   IconCrosshair,
   IconFolder,
   IconMark,
+  IconPanelCollapse,
+  IconPanelExpand,
   IconPlay,
   IconRefresh,
   IconSend,
@@ -135,6 +137,9 @@ export default function App() {
   const [recentPreviewUrls, setRecentPreviewUrls] = useState<string[]>([]);
   const [recentProjectCwds, setRecentProjectCwds] = useState<string[]>([]);
   const [terminalWidth, setTerminalWidth] = useState(640);
+  /** When true, hide preview + URL chrome; terminal is full width */
+  const [previewCollapsed, setPreviewCollapsed] = useState(false);
+  const previewCollapsedRef = useRef(false);
   const [terminalAlive, setTerminalAlive] = useState(false);
   const [grokState, setGrokState] = useState<GrokRuntimeState>("idle");
   const [frameMode, setFrameMode] = useState<FrameMode>("viewport");
@@ -167,6 +172,10 @@ export default function App() {
   useEffect(() => {
     captureBusyRef.current = captureBusy;
   }, [captureBusy]);
+
+  useEffect(() => {
+    previewCollapsedRef.current = previewCollapsed;
+  }, [previewCollapsed]);
 
   useEffect(() => {
     screenshotPathRef.current = screenshotPath;
@@ -366,6 +375,11 @@ export default function App() {
         setCaptureBusy(Boolean(s.captureBusy));
         setFrameMode(s.frameMode || "viewport");
         if (s.layout?.terminalWidth) setTerminalWidth(s.layout.terminalWidth);
+        const collapsed = Boolean(
+          s.previewCollapsed ?? s.layout?.previewCollapsed,
+        );
+        setPreviewCollapsed(collapsed);
+        previewCollapsedRef.current = collapsed;
         if (s.locale) {
           const loc = normalizeLocale(s.locale);
           setLocale(loc);
@@ -414,7 +428,14 @@ export default function App() {
         setPickMode(Boolean((p as { enabled: boolean }).enabled));
       }),
       api.on("layout:bounds", (p) => {
-        const b = p as { terminalWidth: number };
+        const b = p as {
+          terminalWidth?: number;
+          previewCollapsed?: boolean;
+        };
+        if (typeof b.previewCollapsed === "boolean") {
+          setPreviewCollapsed(b.previewCollapsed);
+          previewCollapsedRef.current = b.previewCollapsed;
+        }
         if (!dragging.current && b.terminalWidth) {
           setTerminalWidth(b.terminalWidth);
         }
@@ -549,9 +570,39 @@ export default function App() {
     }
   }
 
+  async function applyPreviewCollapsed(collapsed: boolean) {
+    if (!isElectron()) {
+      setPreviewCollapsed(collapsed);
+      previewCollapsedRef.current = collapsed;
+      requestAnimationFrame(() => requestTerminalFit());
+      return;
+    }
+    try {
+      if (collapsed && pickModeRef.current) {
+        const res = await window.vefg.setPickMode(false);
+        setPickMode(res.pickMode);
+      }
+      const bounds = await window.vefg.setPreviewCollapsed(collapsed);
+      setPreviewCollapsed(Boolean(bounds.previewCollapsed ?? collapsed));
+      previewCollapsedRef.current = Boolean(
+        bounds.previewCollapsed ?? collapsed,
+      );
+      if (bounds.terminalWidth) setTerminalWidth(bounds.terminalWidth);
+      requestAnimationFrame(() => requestTerminalFit());
+    } catch (err) {
+      toastError(err);
+    }
+  }
+
+  async function ensurePreviewExpanded() {
+    if (!previewCollapsedRef.current) return;
+    await applyPreviewCollapsed(false);
+  }
+
   async function togglePick() {
     if (!isElectron() || captureBusyRef.current || captureBusy) return;
     const next = !pickMode;
+    if (next) await ensurePreviewExpanded();
     const res = await window.vefg.setPickMode(next);
     setPickMode(res.pickMode);
     if (res.warning) showToast(res.warning);
@@ -563,6 +614,7 @@ export default function App() {
 
   async function onScreenshot() {
     if (!isElectron() || captureBusyRef.current || captureBusy) return;
+    await ensurePreviewExpanded();
     captureBusyRef.current = true;
     const requestedMode = frameMode;
     const effectiveMode =
@@ -718,6 +770,9 @@ export default function App() {
   }
 
   const clampTerminalWidth = useCallback((width: number) => {
+    if (previewCollapsedRef.current) {
+      return Math.max(MIN_TERMINAL_WIDTH, window.innerWidth);
+    }
     const max = Math.max(
       MIN_TERMINAL_WIDTH,
       window.innerWidth - MIN_PREVIEW_WIDTH - SPLITTER_WIDTH,
@@ -823,14 +878,81 @@ export default function App() {
         : grokState === "ready"
           ? tr("actions.grokReady")
           : tr("actions.startGrok");
-  const maxTerminalWidth = Math.max(
-    MIN_TERMINAL_WIDTH,
-    window.innerWidth - MIN_PREVIEW_WIDTH - SPLITTER_WIDTH,
-  );
+  const maxTerminalWidth = previewCollapsed
+    ? window.innerWidth
+    : Math.max(
+        MIN_TERMINAL_WIDTH,
+        window.innerWidth - MIN_PREVIEW_WIDTH - SPLITTER_WIDTH,
+      );
   const splitPercent = Math.round((terminalWidth / window.innerWidth) * 100);
+  const terminalPaneStyle = previewCollapsed
+    ? { width: "100%" as const, flex: "1 1 auto" as const }
+    : { width: terminalWidth };
+
+  const urlNavForm = (
+    <form
+      className={`url-form ${preview.loading ? "loading" : ""}`}
+      onSubmit={onNavigate}
+      aria-busy={Boolean(preview.loading)}
+    >
+      <button
+        type="button"
+        className="icon-btn"
+        title={tr("nav.back")}
+        aria-label={tr("nav.backAria")}
+        disabled={preview.canGoBack === false}
+        onClick={() => void window.vefg?.goBack()}
+      >
+        <IconChevronLeft />
+      </button>
+      <button
+        type="button"
+        className="icon-btn"
+        title={tr("nav.forward")}
+        aria-label={tr("nav.forwardAria")}
+        disabled={preview.canGoForward === false}
+        onClick={() => void window.vefg?.goForward()}
+      >
+        <IconChevronRight />
+      </button>
+      <button
+        type="button"
+        className="icon-btn"
+        title={tr("nav.reload")}
+        aria-label={tr("nav.reloadAria")}
+        onClick={() => void window.vefg?.reload()}
+      >
+        <IconRefresh />
+      </button>
+      <input
+        className="url-input"
+        value={urlInput}
+        list="recent-preview-urls"
+        onChange={(e) => setUrlInput(e.target.value)}
+        placeholder="http://127.0.0.1:5173"
+        spellCheck={false}
+        aria-label={tr("nav.urlAria")}
+      />
+      <datalist id="recent-preview-urls">
+        {recentPreviewUrls.map((url) => (
+          <option value={url} key={url} />
+        ))}
+      </datalist>
+      {preview.loading ? (
+        <span
+          className="url-loading-spinner"
+          role="progressbar"
+          aria-label={tr("nav.loading")}
+        />
+      ) : null}
+      <button type="submit" className="url-go" aria-label={tr("nav.goAria")}>
+        {tr("nav.go")}
+      </button>
+    </form>
+  );
 
   return (
-    <div className="shell">
+    <div className={`shell ${previewCollapsed ? "preview-collapsed" : ""}`}>
       <header className="toolbar">
         <div className="toolbar-row">
           <div className="brand" title={tr("app.name")}>
@@ -853,70 +975,22 @@ export default function App() {
             {locale === "zh" ? tr("actions.langEn") : tr("actions.langZh")}
           </button>
 
-          <form
-            className={`url-form ${preview.loading ? "loading" : ""}`}
-            onSubmit={onNavigate}
-            aria-busy={Boolean(preview.loading)}
-          >
-            <button
-              type="button"
-              className="icon-btn"
-              title={tr("nav.back")}
-              aria-label={tr("nav.backAria")}
-              disabled={preview.canGoBack === false}
-              onClick={() => void window.vefg?.goBack()}
-            >
-              <IconChevronLeft />
-            </button>
-            <button
-              type="button"
-              className="icon-btn"
-              title={tr("nav.forward")}
-              aria-label={tr("nav.forwardAria")}
-              disabled={preview.canGoForward === false}
-              onClick={() => void window.vefg?.goForward()}
-            >
-              <IconChevronRight />
-            </button>
-            <button
-              type="button"
-              className="icon-btn"
-              title={tr("nav.reload")}
-              aria-label={tr("nav.reloadAria")}
-              onClick={() => void window.vefg?.reload()}
-            >
-              <IconRefresh />
-            </button>
-            <input
-              className="url-input"
-              value={urlInput}
-              list="recent-preview-urls"
-              onChange={(e) => setUrlInput(e.target.value)}
-              placeholder="http://127.0.0.1:5173"
-              spellCheck={false}
-              aria-label={tr("nav.urlAria")}
-            />
-            <datalist id="recent-preview-urls">
-              {recentPreviewUrls.map((url) => (
-                <option value={url} key={url} />
-              ))}
-            </datalist>
-            {preview.loading ? (
-              <span
-                className="url-loading-spinner"
-                role="progressbar"
-                aria-label={tr("nav.loading")}
-              />
-            ) : null}
-            <button type="submit" className="url-go" aria-label={tr("nav.goAria")}>
-              {tr("nav.go")}
-            </button>
-          </form>
-
           {/* Empty titlebar region: drag the window */}
           <div className="titlebar-drag-spacer" aria-hidden />
 
           <div className="toolbar-actions" role="group" aria-label={tr("actions.groupAria")}>
+            {previewCollapsed ? (
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => void applyPreviewCollapsed(false)}
+                title={tr("pane.expandTitle")}
+                aria-label={tr("pane.expandAria")}
+              >
+                <IconPanelExpand />
+                {tr("pane.expand")}
+              </button>
+            ) : null}
             <button
               type="button"
               className="btn btn-ghost"
@@ -966,7 +1040,10 @@ export default function App() {
               type="button"
               className={`btn btn-pick ${pickMode ? "active" : ""}`}
               onClick={() => void togglePick()}
-              disabled={captureBusy || (!pickMode && !previewCapturable)}
+              disabled={
+                captureBusy ||
+                (!pickMode && !previewCapturable && !previewCollapsed)
+              }
               title={
                 captureBusy
                   ? tr("actions.busyTitle")
@@ -984,7 +1061,9 @@ export default function App() {
                 className="frame-mode-select"
                 value={frameMode}
                 onChange={(e) => setFrameMode(e.target.value as FrameMode)}
-                disabled={captureBusy || !previewCapturable}
+                disabled={
+                  captureBusy || (!previewCapturable && !previewCollapsed)
+                }
                 aria-label={tr("actions.frameModeAria")}
                 title={
                   frameMode === "viewport"
@@ -1003,7 +1082,9 @@ export default function App() {
               <button
                 type="button"
                 className="btn frame-button"
-                disabled={captureBusy || !previewCapturable}
+                disabled={
+                  captureBusy || (!previewCapturable && !previewCollapsed)
+                }
                 onClick={() => void onScreenshot()}
                 title={
                   captureBusy
@@ -1252,11 +1333,11 @@ export default function App() {
         </div>
       </header>
 
-      <div className="workspace">
+      <div className={`workspace ${previewCollapsed ? "is-preview-collapsed" : ""}`}>
         <section
           id="terminal-pane"
-          className="terminal-pane"
-          style={{ width: terminalWidth }}
+          className={`terminal-pane ${previewCollapsed ? "is-full" : ""}`}
+          style={terminalPaneStyle}
           aria-label={tr("pane.terminalAria")}
         >
           <div className="pane-label">
@@ -1272,29 +1353,52 @@ export default function App() {
           </div>
         </section>
 
-        <div
-          className="splitter"
-          onMouseDown={onSplitterDown}
-          onKeyDown={onSplitterKeyDown}
-          tabIndex={0}
-          title={tr("pane.splitterTitle")}
-          role="separator"
-          aria-orientation="vertical"
-          aria-label={tr("pane.splitterAria")}
-          aria-controls="terminal-pane preview-pane"
-          aria-valuemin={MIN_TERMINAL_WIDTH}
-          aria-valuemax={maxTerminalWidth}
-          aria-valuenow={Math.round(terminalWidth)}
-          aria-valuetext={tr("pane.splitterValue", { percent: splitPercent })}
-        />
+        {!previewCollapsed ? (
+          <>
+            <div
+              className="splitter"
+              onMouseDown={onSplitterDown}
+              onKeyDown={onSplitterKeyDown}
+              tabIndex={0}
+              title={tr("pane.splitterTitle")}
+              role="separator"
+              aria-orientation="vertical"
+              aria-label={tr("pane.splitterAria")}
+              aria-controls="terminal-pane preview-pane"
+              aria-valuemin={MIN_TERMINAL_WIDTH}
+              aria-valuemax={maxTerminalWidth}
+              aria-valuenow={Math.round(terminalWidth)}
+              aria-valuetext={tr("pane.splitterValue", {
+                percent: splitPercent,
+              })}
+            />
 
-        <section
-          id="preview-pane"
-          className="preview-pane"
-          aria-label={tr("pane.previewAria")}
-        >
-          <div className="preview-area" aria-hidden />
-        </section>
+            <section
+              id="preview-pane"
+              className="preview-pane"
+              aria-label={tr("pane.previewAria")}
+            >
+              <div
+                className="preview-chrome"
+                role="region"
+                aria-label={tr("pane.previewChromeAria")}
+              >
+                <span className="preview-chrome-label">{tr("pane.preview")}</span>
+                {urlNavForm}
+                <button
+                  type="button"
+                  className="icon-btn preview-collapse-btn"
+                  onClick={() => void applyPreviewCollapsed(true)}
+                  title={tr("pane.collapseTitle")}
+                  aria-label={tr("pane.collapseAria")}
+                >
+                  <IconPanelCollapse />
+                </button>
+              </div>
+              <div className="preview-area" aria-hidden />
+            </section>
+          </>
+        ) : null}
       </div>
     </div>
   );

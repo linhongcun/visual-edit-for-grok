@@ -90,3 +90,25 @@ export function IconMark(_p: IconProps) {
     </svg>
   );
 }
+
+/** Collapse right preview pane (panel to the right) */
+export function IconPanelCollapse(_p: IconProps) {
+  return (
+    <svg {...base}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M15 4v16" />
+      <path d="M10 9l-3 3 3 3" />
+    </svg>
+  );
+}
+
+/** Expand / show right preview pane */
+export function IconPanelExpand(_p: IconProps) {
+  return (
+    <svg {...base}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M15 4v16" />
+      <path d="M8 9l3 3-3 3" />
+    </svg>
+  );
+}

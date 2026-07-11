@@ -76,6 +76,7 @@ function testRoundTrip() {
       projectCwd: "/Users/me/app",
       splitRatio: 0.4,
       locale: "",
+      previewCollapsed: false,
       recentPreviewUrls: [
         "http://127.0.0.1:5173/foo",
         "https://example.com/app",
@@ -113,6 +114,29 @@ function testLocaleNormalize() {
   assert.strictEqual(normalizeSettings({ locale: "fr" }).locale, "");
 }
 
+function testPreviewCollapsedPersists() {
+  assert.strictEqual(DEFAULTS.previewCollapsed, false);
+  assert.strictEqual(
+    normalizeSettings({ previewCollapsed: true }).previewCollapsed,
+    true,
+  );
+  assert.strictEqual(
+    normalizeSettings({ previewCollapsed: "yes" }).previewCollapsed,
+    false,
+  );
+  const file = tmpFile();
+  try {
+    saveSettings(file, { previewCollapsed: true });
+    assert.strictEqual(loadSettings(file).previewCollapsed, true);
+  } finally {
+    try {
+      fs.unlinkSync(file);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 function testMissingFileDefaults() {
   const file = path.join(os.tmpdir(), `vefg-missing-${Date.now()}.json`);
   const s = loadSettings(file);
@@ -135,6 +159,7 @@ function run() {
     testDefaultPath,
     testRecentListsAreDedupedAndCapped,
     testLocaleNormalize,
+    testPreviewCollapsedPersists,
   ];
   let failed = 0;
   for (const t of tests) {

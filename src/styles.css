@@ -43,8 +43,9 @@
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --dur: 180ms;
 
-  /* Keep in sync with electron/main.cjs TOOLBAR_HEIGHT */
+  /* Keep in sync with electron/main.cjs TOOLBAR_HEIGHT / PREVIEW_CHROME_HEIGHT */
   --toolbar-height: 96px;
+  --preview-chrome-height: 40px;
   --pane-label-height: 32px;
   --touch-min: 36px;
 }
@@ -201,16 +202,17 @@ summary:focus-visible,
   font-weight: 400;
 }
 
-/* URL rail */
+/* URL rail (lives in preview chrome so it collapses with the page) */
 .url-form {
   display: flex;
   align-items: center;
   gap: 2px;
-  flex: 0 1 560px;
-  min-width: 200px;
-  max-width: 560px;
-  min-height: 40px;
-  padding: 2px 4px 2px 4px;
+  flex: 1 1 auto;
+  min-width: 120px;
+  max-width: none;
+  min-height: 32px;
+  height: 32px;
+  padding: 0 2px 0 2px;
   border-radius: var(--radius);
   border: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
   background: var(--color-background);
@@ -229,8 +231,8 @@ summary:focus-visible,
 }
 
 .icon-btn {
-  min-width: var(--touch-min);
-  min-height: var(--touch-min);
+  min-width: 30px;
+  min-height: 30px;
   border-radius: var(--radius-sm);
   color: var(--color-muted-fg);
   display: grid;
@@ -257,7 +259,7 @@ summary:focus-visible,
 .url-input {
   flex: 1;
   min-width: 0;
-  height: 36px;
+  height: 28px;
   border: none;
   background: transparent;
   padding: 0 var(--space-2);
@@ -289,8 +291,9 @@ summary:focus-visible,
 }
 
 .url-go {
-  min-height: 32px;
-  padding: 0 12px;
+  min-height: 28px;
+  height: 28px;
+  padding: 0 10px;
   margin-right: 2px;
   border-radius: var(--radius-sm);
   font-size: 12px;
@@ -877,6 +880,16 @@ code {
   border-right: none;
 }
 
+.terminal-pane.is-full {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100% !important;
+}
+
+.workspace.is-preview-collapsed .terminal-pane {
+  border-right: none;
+}
+
 .pane-label {
   height: var(--pane-label-height);
   flex-shrink: 0;
@@ -981,13 +994,54 @@ code {
   min-width: 0;
   display: flex;
   flex-direction: column;
+  /* BrowserView is native; only chrome needs pointer events */
   pointer-events: none;
+}
+
+/* Keep in sync with electron/main.cjs PREVIEW_CHROME_HEIGHT */
+.preview-chrome {
+  height: var(--preview-chrome-height, 40px);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-2) 0 var(--space-3);
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 45%, transparent);
+  background: var(--color-card);
+  pointer-events: auto;
+  z-index: 4;
+  min-width: 0;
+}
+
+.preview-chrome-label {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-foreground) 75%, var(--color-muted-fg));
+}
+
+.preview-chrome .url-form {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.preview-collapse-btn {
+  flex-shrink: 0;
+  color: var(--color-muted-fg);
+}
+
+.preview-collapse-btn:hover:not(:disabled) {
+  color: var(--color-foreground);
+  background: var(--color-muted);
 }
 
 .preview-area {
   flex: 1;
   min-height: 0;
   background: var(--color-background);
+  pointer-events: none;
 }
 
 /* Legacy enrichment styles kept inert if referenced */
