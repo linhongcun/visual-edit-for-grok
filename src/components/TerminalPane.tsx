@@ -147,11 +147,13 @@ export default function TerminalPane({
     if (!hostRef.current || !window.vefg || !sessionId) return;
 
     const term = new Terminal({
-      cursorBlink: true,
+      // Blink forces continuous repaints and makes wheel-scroll feel laggy
+      cursorBlink: false,
       fontSize: TERM_FONT_SIZE,
       fontFamily: TERM_FONT_FAMILY,
-      lineHeight: 1.2,
+      lineHeight: 1.15,
       letterSpacing: 0,
+      // Keep box-drawing crisp without the heavier rescale path on every frame
       customGlyphs: true,
       theme: {
         background: "#0a0c10",
@@ -177,10 +179,16 @@ export default function TerminalPane({
         brightWhite: "#ffffff",
       },
       allowProposedApi: true,
-      scrollback: 8000,
+      // Large enough history without punishing scroll/redraw cost
+      scrollback: 5000,
       convertEol: false,
       windowsMode: false,
-      rescaleOverlappingGlyphs: true,
+      // Default xterm scrollSensitivity is 1 — feels glacial on macOS wheel/trackpad
+      scrollSensitivity: 5,
+      fastScrollSensitivity: 12,
+      // No smooth-scroll interpolation (must stay 0 for snappy wheel response)
+      smoothScrollDuration: 0,
+      rescaleOverlappingGlyphs: false,
     });
 
     const fit = new FitAddon();

@@ -1255,7 +1255,12 @@ code {
 }
 
 .terminal-host .xterm-viewport {
-  overflow-y: auto !important;
+  /* xterm owns wheel → scrollTop; keep native overflow without smooth animation */
+  overflow-y: scroll !important;
+  overscroll-behavior: contain;
+  scroll-behavior: auto;
+  /* Avoid macOS rubber-banding stealing wheel momentum inside the terminal */
+  -webkit-overflow-scrolling: auto;
 }
 
 .terminal-host .xterm-screen {

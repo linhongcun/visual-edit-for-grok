@@ -2,6 +2,14 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.6.1] — 2026-07-11
+
+### Terminal scroll performance
+
+- Raise xterm `scrollSensitivity` / `fastScrollSensitivity` (defaults were 1 → felt capped on macOS wheel)
+- Disable smooth scroll interpolation and cursor blink (less continuous repaint during scroll)
+- Slightly leaner glyph path (`rescaleOverlappingGlyphs` off); viewport CSS avoids smooth scroll
+
 ## [0.6.0] — 2026-07-11
 
 ### Capture-to-verify workflow
