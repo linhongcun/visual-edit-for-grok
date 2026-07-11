@@ -230,7 +230,13 @@ export default function App() {
 
   function showToast(msg: string) {
     setToast(msg);
-    window.setTimeout(() => setToast((cur) => (cur === msg ? null : cur)), 5200);
+    window.setTimeout(() => setToast((cur) => (cur === msg ? null : cur)), 6200);
+  }
+
+  /** Prefer main-process actionable errors; still never invent chip confirmation. */
+  function toastError(err: unknown) {
+    const raw = err instanceof Error ? err.message : String(err);
+    showToast(raw);
   }
 
   async function onToggleLocale() {
@@ -440,7 +446,12 @@ export default function App() {
         };
         // Main process owns post-deliver focus handoff — do not storm timers here
         if (r.kind === "error") {
-          showToast(r.message || t(localeRef.current, "toast.captureFailed"));
+          showToast(
+            r.message ||
+              t(localeRef.current, "error.captureFailed") +
+                " " +
+                t(localeRef.current, "error.next.capture"),
+          );
           return;
         }
         const selected =
@@ -571,7 +582,7 @@ export default function App() {
     try {
       await window.vefg.screenshot({ mode: effectiveMode });
     } catch (err) {
-      showToast(err instanceof Error ? err.message : String(err));
+      toastError(err);
     } finally {
       // Main also emits capture:busy; clear local in case event was missed
       captureBusyRef.current = false;
@@ -591,7 +602,7 @@ export default function App() {
     try {
       await window.vefg.deliver({});
     } catch (err) {
-      showToast(err instanceof Error ? err.message : String(err));
+      toastError(err);
     } finally {
       captureBusyRef.current = false;
       setCaptureBusy(false);
@@ -618,7 +629,7 @@ export default function App() {
       const result = await window.vefg.openCaptureFolder();
       showToast(tr("toast.openedFrames", { path: shortPath(result.path, 54) }));
     } catch (err) {
-      showToast(err instanceof Error ? err.message : String(err));
+      toastError(err);
     }
   }
 
@@ -659,7 +670,7 @@ export default function App() {
           : tr("toast.folderSwitched", { path: result.projectCwd }),
       );
     } catch (err) {
-      showToast(err instanceof Error ? err.message : String(err));
+      toastError(err);
     }
   }
 
@@ -686,7 +697,7 @@ export default function App() {
       focusGrokTerminal();
     } catch (err) {
       setGrokState("idle");
-      showToast(err instanceof Error ? err.message : String(err));
+      toastError(err);
     }
   }
 
@@ -699,7 +710,7 @@ export default function App() {
       lastLaunchAtRef.current = 0;
       showToast(tr("toast.shellRestarted"));
     } catch (err) {
-      showToast(err instanceof Error ? err.message : String(err));
+      toastError(err);
     }
   }
 
@@ -794,7 +805,9 @@ export default function App() {
           ? tr("status.grokRequested")
           : grokState === "exited"
             ? tr("status.grokExited")
-            : tr("status.grokIdle");
+            : grokState === "unknown"
+              ? tr("status.grokUnknown")
+              : tr("status.grokIdle");
   const launchDisabled =
     grokState === "launching" ||
     grokState === "launch-requested" ||
@@ -1092,7 +1105,10 @@ export default function App() {
           ) : preview.error ? (
             <div className="banner-inline">
               {tr("status.previewFailed", { error: preview.error })}
-              <span className="hint">{tr("status.previewHint")}</span>
+              <span className="hint">
+                {" "}
+                {tr("error.next.preview")}
+              </span>
             </div>
           ) : (
             <>

@@ -30,6 +30,10 @@ const {
 } = require("./delivery-status.cjs");
 const { t, normalizeLocale, detectLocale } = require("../i18n/index.cjs");
 const {
+  buildActionableError,
+  shouldConfirmQuit,
+} = require("./operator-guidance.cjs");
+const {
   canStartCapture,
   shouldRunCleanup,
   shouldFlushSettings,
@@ -44,6 +48,7 @@ const {
   DEFAULT_CLEANUP_MIN_INTERVAL_MS,
   DEFAULT_SETTINGS_DEBOUNCE_MS,
 } = require("./runtime-policy.cjs");
+const { resolveGrokBinary } = require("./terminal.cjs");
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -133,6 +138,93 @@ function applyLoadedSettings() {
 /** @param {string} key @param {Record<string, string | number>} [vars] */
 function tr(key, vars) {
   return t(uiLocale, key, vars);
+}
+
+/** @param {string | { code?: string, message?: string, detail?: string }} err */
+function actionableError(err) {
+  if (typeof err === "string") {
+    return buildActionableError({ message: err, locale: uiLocale });
+  }
+  return buildActionableError({
+    code: err?.code,
+    message: err?.message,
+    detail: err?.detail,
+    locale: uiLocale,
+  });
+}
+
+function grokBinaryExists() {
+  const bin = resolveGrokBinary();
+  if (bin !== "grok" && fs.existsSync(bin)) return { ok: true, path: bin };
+  try {
+    const which = execFileSync(
+      process.platform === "win32" ? "where" : "which",
+      ["grok"],
+      { encoding: "utf8", timeout: 2000 },
+    )
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter(Boolean)[0];
+    if (which && fs.existsSync(which)) return { ok: true, path: which };
+  } catch {
+    /* not on PATH */
+  }
+  return { ok: false, path: bin };
+}
+
+/** Prevent double-dispose / re-entrant quit dialogs */
+let isQuitting = false;
+let quitDialogOpen = false;
+
+function sessionAliveForQuit() {
+  return Boolean(termSession?.isAlive());
+}
+
+/**
+ * @param {import('electron').Event} event
+ * @param {"close"|"quit"} reason
+ */
+function requestQuitConfirmation(event, reason = "close") {
+  if (isQuitting) return false;
+  if (
+    !shouldConfirmQuit({
+      sessionAlive: sessionAliveForQuit(),
+      shellAlive: termSession?.isAlive(),
+      grokRunning: termSession?.isGrokAlive(),
+    })
+  ) {
+    return false;
+  }
+  event.preventDefault();
+  if (quitDialogOpen) return true;
+  quitDialogOpen = true;
+  const win =
+    mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+  void dialog
+    .showMessageBox(win, {
+      type: "question",
+      buttons: [tr("quit.leave"), tr("quit.stay")],
+      defaultId: 1,
+      cancelId: 1,
+      message: tr("quit.message"),
+      detail: tr("quit.detail"),
+      noLink: true,
+    })
+    .then(({ response }) => {
+      quitDialogOpen = false;
+      if (response === 0) {
+        isQuitting = true;
+        if (termSession) {
+          termSession.dispose();
+          termSession = null;
+        }
+        app.quit();
+      }
+    })
+    .catch(() => {
+      quitDialogOpen = false;
+    });
+  return true;
 }
 
 function setUiLocale(next) {
@@ -361,6 +453,9 @@ function createWindow() {
   bindAppShortcuts(mainWindow.webContents);
 
   mainWindow.on("resize", layoutViews);
+  mainWindow.on("close", (event) => {
+    requestQuitConfirmation(event, "close");
+  });
   mainWindow.on("closed", () => {
     mainWindow = null;
     previewView = null;
@@ -972,7 +1067,7 @@ function loadPreview(url) {
   try {
     const parsed = new URL(url);
     if (!["http:", "https:"].includes(parsed.protocol)) {
-      throw new Error("Only http(s) URLs are supported");
+      throw new Error(actionableError({ code: "invalid-url" }).text);
     }
     previewUrl = parsed.href;
     recentPreviewUrls = [previewUrl, ...recentPreviewUrls.filter((item) => item !== previewUrl)].slice(0, 8);
@@ -1472,7 +1567,7 @@ function buildCaptureMeta({
 
 async function captureScreenshot(options = {}) {
   if (!isPreviewCapturable()) {
-    throw new Error("Preview is not ready — open a loaded http(s) page first.");
+    throw new Error(actionableError({ code: "preview-not-ready" }).text);
   }
   const requestedMode = ["viewport", "target-context"].includes(options?.mode)
     ? options.mode
@@ -1480,7 +1575,12 @@ async function captureScreenshot(options = {}) {
   preferredFrameMode = requestedMode;
   const locked = await withCaptureLock(async () => {
     if (!isPreviewCapturable()) {
-      throw new Error("Preview is not ready — wait for loading to finish.");
+      throw new Error(
+        actionableError({
+          code: "preview-not-ready",
+          detail: "loading",
+        }).text,
+      );
     }
     const captureIdentity = snapshotPreviewIdentity();
     let selectionForFrame = null;
@@ -1580,7 +1680,9 @@ async function captureScreenshot(options = {}) {
     };
   });
   if (locked && locked.busy) {
-    throw new Error(locked.statusMessage || tr("main.busy"));
+    throw new Error(
+      locked.statusMessage || actionableError({ code: "busy" }).text,
+    );
   }
   // On throw inside lock, prev pair is untouched (takeScreenshotFile no longer mutates)
   if (locked?.pastedToTerminal) {
@@ -1608,7 +1710,7 @@ async function runScreenshotAndNotify(options = {}) {
 
 async function resendLastCaptureAndNotify() {
   if (!lastSelection && !lastScreenshotPath) {
-    const message = tr("main.nothingResend");
+    const message = actionableError({ code: "nothing-to-resend" }).text;
     sendToRenderer("capture:result", { kind: "error", message });
     return { ok: false, message };
   }
@@ -1898,7 +2000,7 @@ function registerIpc() {
     const on = Boolean(enabled);
     let warning = null;
     if (on && !isPreviewCapturable()) {
-      warning = tr("main.pickWarningNoPreview");
+      warning = actionableError({ code: "preview-not-ready" }).text;
     } else if (on && !termSession?.isGrokAlive()) {
       warning = tr("main.pickWarningNoGrok");
     }
@@ -1916,7 +2018,9 @@ function registerIpc() {
 
   ipcMain.handle("capture:recopy", async (_e, enrichment = {}) => {
     if (!lastSelection && !lastScreenshotPath) {
-      throw new Error(tr("main.nothingResend"));
+      throw new Error(
+        actionableError({ code: "nothing-to-resend" }).text,
+      );
     }
     const locked = await withCaptureLock(async () =>
       deliverCapture(lastSelection, lastScreenshotPath, "recopy", {
@@ -2032,9 +2136,17 @@ function registerIpc() {
       });
       return { ok: true, cwd: projectCwd };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      sendToRenderer("terminal:status", { alive: false, error: message });
-      throw err;
+      const raw = err instanceof Error ? err.message : String(err);
+      const guided = actionableError({
+        code: "terminal-start-fail",
+        message: raw,
+        detail: raw,
+      });
+      sendToRenderer("terminal:status", {
+        alive: false,
+        error: guided.text,
+      });
+      throw new Error(guided.text);
     }
   });
 
@@ -2074,6 +2186,11 @@ function registerIpc() {
         grokState: "running",
       };
     }
+    const bin = grokBinaryExists();
+    if (!bin.ok) {
+      const guided = actionableError({ code: "grok-missing" });
+      throw new Error(guided.text);
+    }
     try {
       sendToRenderer(
         "terminal:data",
@@ -2106,16 +2223,24 @@ function registerIpc() {
         ...result,
       };
     } catch (err) {
+      const raw = err instanceof Error ? err.message : String(err);
+      const guided = actionableError({
+        code: /ENOENT|not found|no such file/i.test(raw)
+          ? "grok-missing"
+          : "grok-launch-fail",
+        message: raw,
+        detail: raw,
+      });
       sendToRenderer("terminal:status", {
-        alive: false,
-        shellAlive: false,
-        terminalMode: null,
+        alive: Boolean(termSession?.isAlive()),
+        shellAlive: Boolean(termSession?.isAlive()),
+        terminalMode: termSession?.getMode() || null,
         grokRunning: false,
         grokLaunchRequested: false,
         grokReady: false,
-        error: err instanceof Error ? err.message : String(err),
+        error: guided.text,
       });
-      throw err;
+      throw new Error(guided.text);
     }
   });
 
@@ -2146,6 +2271,12 @@ app.whenReady().then(() => {
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+});
+
+app.on("before-quit", (event) => {
+  // Cmd+Q / menu Quit — confirm while session is alive
+  if (isQuitting) return;
+  requestQuitConfirmation(event, "quit");
 });
 
 app.on("window-all-closed", () => {

@@ -1,6 +1,6 @@
 # Visual Capture for Grok
 
-**Version 0.4.5** · macOS (Apple Silicon)
+**Version 0.4.6** · macOS (Apple Silicon)
 
 Side-by-side workbench: **left = native Grok Build TUI**, **right = website preview**.  
 **Aim** or **Frame** a UI → the app attempts an image paste + grounded DOM-context write in Grok’s PTY. If Grok is not running, text + image stay on the clipboard.

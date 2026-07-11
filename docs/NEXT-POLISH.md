@@ -22,7 +22,15 @@ Codex-inspired high-ROI items for Visual Capture for Grok. This document records
 
 Shipped pure API: `classifyDeliveryOutcome` / `deliveryOutcomeLabel` in `electron/delivery-status.cjs`.
 
-## Deferred (not this pass)
+## Follow-up (v0.4.6)
+
+| Item | Status |
+|------|--------|
+| Actionable error next-steps | Done (`operator-guidance.cjs`) |
+| Quit confirmation while session alive | Done |
+| Shell vs Grok status clarity | Done |
+
+## Deferred (still out of scope)
 
 - GitHub DMG release upload
 - Grok markdown table layout algorithm

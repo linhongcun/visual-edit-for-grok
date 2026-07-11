@@ -2,6 +2,17 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.4.6] — 2026-07-11
+
+### Operator polish (actionable errors, quit safety)
+
+See [docs/OPERATOR-POLISH.md](./docs/OPERATOR-POLISH.md).
+
+1. **Actionable failures** — pure `buildActionableError` / `inferOperatorErrorCode` with next-step guidance for preview, Grok missing/launch, terminal start, nothing-to-resend, busy, invalid URL; wired into main throws + renderer toasts.
+2. **Status clarity** — shell on/off labels separate from Grok state; unknown state label; ready still requires explicit ready signal.
+3. **Quit safety** — window close and app quit confirm when the embedded session is alive; confirmed quit disposes the PTY (stops Grok).
+4. **Tests** — `test/operator-guidance.test.cjs` drives the shipped helper.
+
 ## [0.4.5] — 2026-07-11
 
 ### Next-round polish (list → execute)
