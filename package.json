@@ -1,0 +1,99 @@
+{
+  "name": "visual-edit-for-grok",
+  "version": "0.3.0",
+  "description": "Visual Capture for Grok — left: native Grok TUI; right: Aim/Frame preview → multimodal image + DOM into Grok",
+  "main": "electron/main.cjs",
+  "private": true,
+  "author": "Visual Capture for Grok",
+  "productName": "Visual Capture for Grok",
+  "scripts": {
+    "dev": "concurrently -k \"vite\" \"wait-on http://127.0.0.1:5179 && VEFG_DEV=1 electron .\"",
+    "build": "vite build",
+    "start": "npm run build && electron .",
+    "demo": "python3 -m http.server 8765 --directory demo",
+    "test": "node test/clipboard-payload.test.cjs && node test/settings-store.test.cjs && node test/capture-cleanup.test.cjs && node test/deliver-helpers.test.cjs && node test/runtime-policy.test.cjs",
+    "rebuild": "electron-rebuild -f -w node-pty",
+    "postinstall": "electron-rebuild -f -w node-pty || true",
+    "pack": "npm run build && electron-builder --mac dir",
+    "dist": "npm run build && electron-builder --mac",
+    "dist:dmg": "npm run build && electron-builder --mac dmg"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-web-links": "^0.11.0",
+    "@xterm/xterm": "^5.5.0",
+    "node-pty": "^1.0.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^3.7.1",
+    "@types/react": "^19.1.2",
+    "@types/react-dom": "^19.1.2",
+    "@vitejs/plugin-react": "^4.4.1",
+    "concurrently": "^9.1.2",
+    "electron": "^35.2.1",
+    "electron-builder": "^26.15.3",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.3",
+    "wait-on": "^8.0.3"
+  },
+  "build": {
+    "appId": "com.local.visual-capture-for-grok",
+    "productName": "Visual Capture for Grok",
+    "copyright": "Copyright © Visual Capture for Grok",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json",
+      "node_modules/**/*",
+      "!node_modules/**/{test,tests,__tests__,docs,example,examples,man}/**",
+      "!**/*.{md,map,ts}",
+      "!**/node_modules/*/{CHANGELOG.md,README.md,readme.md}"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/node-pty/**"
+    ],
+    "extraMetadata": {
+      "main": "electron/main.cjs"
+    },
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.icns",
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "identity": null,
+      "extendInfo": {
+        "NSCameraUsageDescription": "Not used — Visual Capture only screenshots the embedded preview.",
+        "CFBundleDisplayName": "Visual Capture for Grok",
+        "CFBundleName": "Visual Capture for Grok"
+      }
+    },
+    "dmg": {
+      "title": "Visual Capture for Grok",
+      "artifactName": "Visual-Capture-for-Grok-${version}-${arch}.dmg"
+    },
+    "npmRebuild": true,
+    "nodeGypRebuild": false,
+    "electronVersion": "35.7.5"
+  }
+}

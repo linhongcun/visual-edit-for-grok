@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+release/
+out/
+.vite/
+
+# Electron / packager leftovers
+*.dmg
+*.blockmap
+dist_electron/
+dist-electron/
+
+# Logs & caches
+*.log
+npm-debug.log*
+.npm/
+.cache/
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Env / secrets (never commit)
+.env
+.env.*
+!.env.example
+
+# Test / temp
+coverage/
+tmp/
+temp/
+*.tsbuildinfo

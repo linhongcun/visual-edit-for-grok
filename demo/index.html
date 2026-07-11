@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VEFG Demo Page</title>
+    <style>
+      :root {
+        font-family: Inter, system-ui, sans-serif;
+        color: #0f172a;
+        background: #f8fafc;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 16px 28px;
+        background: #fff;
+        border-bottom: 1px solid #e2e8f0;
+      }
+      .logo {
+        font-weight: 700;
+        font-size: 18px;
+      }
+      .nav a {
+        margin-left: 16px;
+        color: #64748b;
+        text-decoration: none;
+      }
+      main {
+        max-width: 960px;
+        margin: 0 auto;
+        padding: 48px 24px;
+      }
+      h1 {
+        font-size: 40px;
+        letter-spacing: -0.03em;
+        margin: 0 0 12px;
+      }
+      .lead {
+        color: #64748b;
+        font-size: 18px;
+        max-width: 520px;
+        line-height: 1.6;
+      }
+      .cta {
+        margin-top: 24px;
+        display: inline-flex;
+        gap: 12px;
+      }
+      .btn {
+        border: none;
+        border-radius: 10px;
+        padding: 12px 18px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .btn-primary {
+        background: #2563eb;
+        color: #fff;
+      }
+      .btn-ghost {
+        background: #e2e8f0;
+        color: #0f172a;
+      }
+      .cards {
+        margin-top: 48px;
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 16px;
+      }
+      .card {
+        background: #fff;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 20px;
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+      }
+      .card h3 {
+        margin: 0 0 8px;
+        font-size: 16px;
+      }
+      .card p {
+        margin: 0;
+        color: #64748b;
+        font-size: 14px;
+        line-height: 1.55;
+      }
+      .card ul {
+        margin: 10px 0 0;
+        padding-left: 1.15em;
+        color: #64748b;
+        font-size: 13px;
+        line-height: 1.55;
+      }
+      .card li + li {
+        margin-top: 4px;
+      }
+      .card code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        background: #f1f5f9;
+        color: #334155;
+        padding: 1px 5px;
+        border-radius: 4px;
+      }
+      footer {
+        margin-top: 64px;
+        color: #94a3b8;
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="logo">Acme Studio</div>
+      <nav class="nav">
+        <a href="#features">功能</a>
+        <a href="#pricing">价格</a>
+        <a href="#docs">文档</a>
+      </nav>
+    </header>
+    <main>
+      <h1 id="hero-title">用视觉方式编辑前端</h1>
+      <p class="lead" id="hero-lead">
+        这是一个本地演示页。在 Visual Edit for Grok 中打开本页，拾取任意元素，然后让
+        Grok 修改样式或文案。
+      </p>
+      <div class="cta">
+        <button class="btn btn-primary" id="cta-primary">开始</button>
+        <button class="btn btn-ghost" id="cta-secondary">更多</button>
+      </div>
+      <section class="cards" id="features">
+        <article class="card">
+          <h3>拾取元素</h3>
+          <p>
+            在右侧预览里点选任意 DOM 节点，一次采集定位信息与视觉上下文，再交给左侧 Grok 精准改稿。
+          </p>
+          <ul>
+            <li>自动生成 CSS 选择器、DOM 路径、tag / id / class、可见文案与边界框</li>
+            <li>拾取时默认截图：优先裁切元素区域，并保留整页备份</li>
+            <li>输出对齐 Cursor <code>browser_element</code>，可附带样式 before→after 与改稿意图</li>
+            <li>结果写入剪贴板，并可自动粘贴进原生 Grok 终端</li>
+          </ul>
+        </article>
+        <article class="card">
+          <h3>Grok Build</h3>
+          <p>
+            左侧嵌入原生 <code>grok</code> TUI（真实 shell），采集结果直接投递到输入区，由 Grok 在项目源码里改样式与文案。
+          </p>
+          <ul>
+            <li>一键启动 Grok，终端 cwd 对齐你的前端项目目录</li>
+            <li>意图面板可描述「按钮再大一点」等改动，并编辑目标样式</li>
+            <li>不另做一套 agent 聊天，就是原生 Grok Build 工作流</li>
+          </ul>
+        </article>
+        <article class="card">
+          <h3>前端友好</h3>
+          <p>
+            左右分屏：终端 + 本地预览，从点选到改稿一条闭环，适合 Vite / React / Vue 等日常前端开发。
+          </p>
+          <ul>
+            <li>BrowserView 打开本地预览 URL，中间分隔条可拖动</li>
+            <li>截图落盘 <code>~/.grok/visual-edit-captures/</code>，外置终端也能 ⌘V</li>
+            <li>自动粘贴可开关；可随时再次「粘贴到终端」重投上次采集</li>
+          </ul>
+        </article>
+      </section>
+      <footer>Demo · Visual Edit for Grok</footer>
+    </main>
+  </body>
+</html>
