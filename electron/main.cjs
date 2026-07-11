@@ -250,8 +250,8 @@ function setUiLocale(next) {
 const isDev = process.env.VEFG_DEV === "1";
 // Keep in sync with src/styles.css --toolbar-height / --preview-chrome-height
 const TOOLBAR_HEIGHT = 96;
-/** URL + nav controls live in the preview pane chrome (collapse with page) */
-const PREVIEW_CHROME_HEIGHT = 40;
+/** URL + capture actions live in the preview pane chrome (collapse with page) */
+const PREVIEW_CHROME_HEIGHT = 44;
 const SPLITTER_WIDTH = 5;
 // Wider floor so Grok TUI tables keep more columns when the split is tight
 const MIN_TERMINAL_WIDTH = 400;

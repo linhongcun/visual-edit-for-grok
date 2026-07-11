@@ -45,8 +45,8 @@
 
   /* Keep in sync with electron/main.cjs TOOLBAR_HEIGHT / PREVIEW_CHROME_HEIGHT */
   --toolbar-height: 96px;
-  --preview-chrome-height: 40px;
-  --pane-label-height: 32px;
+  --preview-chrome-height: 44px;
+  --pane-label-height: 40px;
   --touch-min: 36px;
 }
 
@@ -906,19 +906,74 @@ code {
   border-bottom: 1px solid color-mix(in srgb, var(--color-border) 45%, transparent);
 }
 
-/* Multi-terminal tabs */
-.term-tabs {
+/* Terminal chrome: tabs + terminal-scoped actions (folder / Grok) */
+.term-chrome {
   height: var(--pane-label-height);
   flex-shrink: 0;
   display: flex;
-  align-items: stretch;
-  gap: 2px;
-  padding: 0 4px 0 6px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px 0 6px;
   background: var(--color-card);
   border-bottom: 1px solid color-mix(in srgb, var(--color-border) 45%, transparent);
   min-width: 0;
+}
+
+.term-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
   overflow-x: auto;
   overflow-y: hidden;
+  height: 100%;
+}
+
+.pane-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.btn-compact {
+  min-height: 28px;
+  height: 28px;
+  padding: 0 8px;
+  font-size: 11px;
+  gap: 4px;
+}
+
+.btn-compact svg {
+  width: 13px;
+  height: 13px;
+}
+
+.recent-project-select.compact {
+  width: 72px;
+  min-height: 28px;
+  font-size: 10px;
+  padding: 0 18px 0 6px;
+}
+
+.frame-control.compact {
+  min-height: 28px;
+}
+
+.frame-control.compact .frame-mode-select {
+  min-height: 28px;
+  width: 64px;
+  font-size: 10px;
+  padding: 0 16px 0 6px;
+}
+
+.frame-control.compact .frame-button {
+  min-height: 28px;
+  height: 28px;
+  padding-left: 8px;
+  padding-right: 8px;
 }
 
 .term-tab {
@@ -1008,13 +1063,20 @@ code {
 }
 
 .term-tabs-hint {
-  margin-left: auto;
   flex-shrink: 0;
-  align-self: center;
-  padding-right: 8px;
-  font-size: 11px;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 10px;
+  font-weight: 600;
   color: var(--color-muted-fg);
   white-space: nowrap;
+  padding-right: 2px;
+}
+
+.term-pane-actions {
+  border-left: 1px solid color-mix(in srgb, var(--color-border) 40%, transparent);
+  padding-left: 6px;
 }
 
 .terminal-stack {
@@ -1127,11 +1189,11 @@ code {
 
 /* Keep in sync with electron/main.cjs PREVIEW_CHROME_HEIGHT */
 .preview-chrome {
-  height: var(--preview-chrome-height, 40px);
+  height: var(--preview-chrome-height, 44px);
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: 6px;
   padding: 0 var(--space-2) 0 var(--space-3);
   border-bottom: 1px solid color-mix(in srgb, var(--color-border) 45%, transparent);
   background: var(--color-card);
@@ -1151,7 +1213,14 @@ code {
 
 .preview-chrome .url-form {
   flex: 1 1 auto;
-  min-width: 0;
+  min-width: 80px;
+  max-width: none;
+}
+
+.preview-pane-actions {
+  border-left: 1px solid color-mix(in srgb, var(--color-border) 40%, transparent);
+  padding-left: 6px;
+  flex-shrink: 0;
 }
 
 .preview-collapse-btn {

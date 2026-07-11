@@ -2,6 +2,14 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.5.2] — 2026-07-11
+
+### Pane-scoped controls
+
+- **Terminal chrome**: tabs + Folder / Start Grok / Reset for the **active** tab
+- **Preview chrome**: URL + Aim / Frame / Re-send (capture targets the active terminal)
+- Top bar is app chrome only (brand, language, expand when preview hidden)
+
 ## [0.5.1] — 2026-07-11
 
 ### Quit confirm only when Grok is running

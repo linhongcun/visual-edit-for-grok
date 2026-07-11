@@ -998,6 +998,11 @@ export default function App() {
     ? { width: "100%" as const, flex: "1 1 auto" as const }
     : { width: terminalWidth };
 
+  const activeTabLabel =
+    termTabs.find((t) => t.id === activeTermId)?.label ||
+    (projectCwd ? projectCwd.split(/[/\\]/).pop() : "") ||
+    tr("pane.terminal");
+
   const urlNavForm = (
     <form
       className={`url-form ${preview.loading ? "loading" : ""}`}
@@ -1060,6 +1065,164 @@ export default function App() {
     </form>
   );
 
+  /** Terminal-scoped: folder + Start Grok for the active tab */
+  const terminalScopedActions = (
+    <div
+      className="pane-actions term-pane-actions"
+      role="group"
+      aria-label={tr("term.actionsAria")}
+    >
+      <button
+        type="button"
+        className="btn btn-ghost btn-compact"
+        onClick={() => void onPickCwd()}
+        title={projectCwd || tr("actions.folderTitle")}
+        aria-label={tr("actions.folderAria")}
+      >
+        <IconFolder />
+        {tr("actions.folder")}
+      </button>
+      {recentProjectCwds.length > 1 ? (
+        <select
+          className="recent-project-select compact"
+          value=""
+          onChange={(event) => {
+            void onRecentProject(event.target.value);
+          }}
+          aria-label={tr("actions.recentAria")}
+          title={tr("actions.recentTitle")}
+        >
+          <option value="">{tr("actions.recent")}</option>
+          {recentProjectCwds.map((cwd) => (
+            <option value={cwd} key={cwd} disabled={cwd === projectCwd}>
+              {shortPath(cwd, 30)}
+            </option>
+          ))}
+        </select>
+      ) : null}
+      <button
+        type="button"
+        className="btn btn-primary btn-compact"
+        onClick={() => void onLaunchGrok()}
+        disabled={launchDisabled}
+        title={
+          grokState === "launch-requested"
+            ? tr("actions.startGrokTitleRequested")
+            : grokState === "ready"
+              ? tr("actions.startGrokTitleReady")
+              : tr("actions.startGrokTitleIdle")
+        }
+        aria-label={tr("actions.startGrokAria")}
+      >
+        <IconPlay />
+        {launchLabel}
+      </button>
+      <button
+        type="button"
+        className="btn btn-ghost btn-compact"
+        onClick={() => void onRestartTerminal()}
+        title={tr("status.resetTermAria")}
+        aria-label={tr("status.resetTermAria")}
+      >
+        {tr("status.resetTerm")}
+      </button>
+    </div>
+  );
+
+  /** Preview-scoped: Aim / Frame / Resend → deliver into active terminal */
+  const previewScopedActions = (
+    <div
+      className="pane-actions preview-pane-actions"
+      role="group"
+      aria-label={tr("actions.groupAria")}
+    >
+      <button
+        type="button"
+        className={`btn btn-pick btn-compact ${pickMode ? "active" : ""}`}
+        onClick={() => void togglePick()}
+        disabled={
+          captureBusy ||
+          (!pickMode && !previewCapturable && !previewCollapsed)
+        }
+        title={
+          captureBusy
+            ? tr("actions.busyTitle")
+            : tr("actions.aimTitle")
+        }
+        aria-label={
+          pickMode ? tr("actions.aimCancelAria") : tr("actions.aimAria")
+        }
+        aria-pressed={pickMode}
+        aria-busy={captureBusy}
+      >
+        <IconCrosshair />
+        {pickMode ? tr("actions.aiming") : tr("actions.aim")}
+      </button>
+      <div className="frame-control compact">
+        <select
+          className="frame-mode-select"
+          value={frameMode}
+          onChange={(e) => setFrameMode(e.target.value as FrameMode)}
+          disabled={captureBusy || (!previewCapturable && !previewCollapsed)}
+          aria-label={tr("actions.frameModeAria")}
+          title={
+            frameMode === "viewport"
+              ? tr("actions.frameModeViewport")
+              : tr("actions.frameModeTarget")
+          }
+        >
+          <option value="viewport">{tr("actions.frameFull")}</option>
+          <option
+            value="target-context"
+            disabled={!selection || preview.selectionStale}
+          >
+            {tr("actions.frameTarget")}
+          </option>
+        </select>
+        <button
+          type="button"
+          className="btn frame-button btn-compact"
+          disabled={captureBusy || (!previewCapturable && !previewCollapsed)}
+          onClick={() => void onScreenshot()}
+          title={
+            captureBusy
+              ? tr("actions.busyTitle")
+              : frameMode === "viewport"
+                ? tr("actions.frameTitleViewport")
+                : tr("actions.frameTitleTarget")
+          }
+          aria-label={`Capture ${
+            frameMode === "viewport"
+              ? tr("actions.frameAriaViewport")
+              : tr("actions.frameAriaTarget")
+          }`}
+          aria-busy={captureBusy}
+        >
+          <IconCamera />
+          {captureBusy ? "…" : tr("actions.frame")}
+        </button>
+      </div>
+      <button
+        type="button"
+        className="btn btn-compact"
+        disabled={!hasCapture || captureBusy}
+        onClick={() => void onResend()}
+        title={
+          captureBusy
+            ? tr("actions.busyTitle")
+            : hasCapture
+              ? tr("actions.resendTitleActive", { tab: activeTabLabel })
+              : tr("actions.resendEmpty")
+        }
+        aria-label={tr("actions.resendAria")}
+        aria-busy={captureBusy}
+      >
+        <IconSend />
+        {tr("actions.resend")}
+      </button>
+    </div>
+  );
+
   return (
     <div className={`shell ${previewCollapsed ? "preview-collapsed" : ""}`}>
       <header className="toolbar">
@@ -1087,150 +1250,27 @@ export default function App() {
           {/* Empty titlebar region: drag the window */}
           <div className="titlebar-drag-spacer" aria-hidden />
 
-          <div className="toolbar-actions" role="group" aria-label={tr("actions.groupAria")}>
+          <div
+            className="toolbar-actions"
+            role="group"
+            aria-label={tr("actions.appChromeAria")}
+          >
             {previewCollapsed ? (
-              <button
-                type="button"
-                className="btn btn-ghost"
-                onClick={() => void applyPreviewCollapsed(false)}
-                title={tr("pane.expandTitle")}
-                aria-label={tr("pane.expandAria")}
-              >
-                <IconPanelExpand />
-                {tr("pane.expand")}
-              </button>
-            ) : null}
-            <button
-              type="button"
-              className="btn btn-ghost"
-              onClick={() => void onPickCwd()}
-              title={projectCwd || tr("actions.folderTitle")}
-              aria-label={tr("actions.folderAria")}
-            >
-              <IconFolder />
-              {tr("actions.folder")}
-            </button>
-            {recentProjectCwds.length > 1 ? (
-              <select
-                className="recent-project-select"
-                value=""
-                onChange={(event) => {
-                  void onRecentProject(event.target.value);
-                }}
-                aria-label={tr("actions.recentAria")}
-                title={tr("actions.recentTitle")}
-              >
-                <option value="">{tr("actions.recent")}</option>
-                {recentProjectCwds.map((cwd) => (
-                  <option value={cwd} key={cwd} disabled={cwd === projectCwd}>
-                    {shortPath(cwd, 30)}
-                  </option>
-                ))}
-              </select>
-            ) : null}
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={() => void onLaunchGrok()}
-              disabled={launchDisabled}
-              title={
-                grokState === "launch-requested"
-                  ? tr("actions.startGrokTitleRequested")
-                  : grokState === "ready"
-                    ? tr("actions.startGrokTitleReady")
-                    : tr("actions.startGrokTitleIdle")
-              }
-              aria-label={tr("actions.startGrokAria")}
-            >
-              <IconPlay />
-              {launchLabel}
-            </button>
-            <button
-              type="button"
-              className={`btn btn-pick ${pickMode ? "active" : ""}`}
-              onClick={() => void togglePick()}
-              disabled={
-                captureBusy ||
-                (!pickMode && !previewCapturable && !previewCollapsed)
-              }
-              title={
-                captureBusy
-                  ? tr("actions.busyTitle")
-                  : tr("actions.aimTitle")
-              }
-              aria-label={pickMode ? tr("actions.aimCancelAria") : tr("actions.aimAria")}
-              aria-pressed={pickMode}
-              aria-busy={captureBusy}
-            >
-              <IconCrosshair />
-              {pickMode ? tr("actions.aiming") : tr("actions.aim")}
-            </button>
-            <div className="frame-control">
-              <select
-                className="frame-mode-select"
-                value={frameMode}
-                onChange={(e) => setFrameMode(e.target.value as FrameMode)}
-                disabled={
-                  captureBusy || (!previewCapturable && !previewCollapsed)
-                }
-                aria-label={tr("actions.frameModeAria")}
-                title={
-                  frameMode === "viewport"
-                    ? tr("actions.frameModeViewport")
-                    : tr("actions.frameModeTarget")
-                }
-              >
-                <option value="viewport">{tr("actions.frameFull")}</option>
-                <option
-                  value="target-context"
-                  disabled={!selection || preview.selectionStale}
+              <>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => void applyPreviewCollapsed(false)}
+                  title={tr("pane.expandTitle")}
+                  aria-label={tr("pane.expandAria")}
                 >
-                  {tr("actions.frameTarget")}
-                </option>
-              </select>
-              <button
-                type="button"
-                className="btn frame-button"
-                disabled={
-                  captureBusy || (!previewCapturable && !previewCollapsed)
-                }
-                onClick={() => void onScreenshot()}
-                title={
-                  captureBusy
-                    ? tr("actions.busyTitle")
-                    : frameMode === "viewport"
-                      ? tr("actions.frameTitleViewport")
-                      : tr("actions.frameTitleTarget")
-                }
-                aria-label={`Capture ${
-                  frameMode === "viewport"
-                    ? tr("actions.frameAriaViewport")
-                    : tr("actions.frameAriaTarget")
-                }`}
-                aria-busy={captureBusy}
-              >
-                <IconCamera />
-                {captureBusy ? "…" : tr("actions.frame")}
-              </button>
-            </div>
-            <button
-              type="button"
-              className="btn"
-              disabled={!hasCapture || captureBusy}
-              onClick={() => void onResend()}
-              title={
-                captureBusy
-                  ? tr("actions.busyTitle")
-                  : hasCapture
-                    ? tr("actions.resendTitle")
-                    : tr("actions.resendEmpty")
-              }
-              aria-label={tr("actions.resendAria")}
-              aria-busy={captureBusy}
-            >
-              <IconSend />
-              {tr("actions.resend")}
-            </button>
+                  <IconPanelExpand />
+                  {tr("pane.expand")}
+                </button>
+                {/* Capture stays available while preview is hidden (auto-expands) */}
+                {previewScopedActions}
+              </>
+            ) : null}
           </div>
         </div>
 
@@ -1449,68 +1489,75 @@ export default function App() {
           style={terminalPaneStyle}
           aria-label={tr("pane.terminalAria")}
         >
-          <div className="term-tabs" role="tablist" aria-label={tr("term.tabsAria")}>
-            {(termTabs.length
-              ? termTabs
-              : activeTermId
-                ? [
-                    {
-                      id: activeTermId,
-                      cwd: projectCwd,
-                      label: projectCwd
-                        ? projectCwd.split(/[/\\]/).pop() || "Terminal"
-                        : "Terminal",
-                    },
-                  ]
-                : []
-            ).map((tab) => {
-              const selected = tab.id === activeTermId;
-              return (
-                <div
-                  key={tab.id}
-                  className={`term-tab ${selected ? "active" : ""} ${tab.grokRunning ? "grok" : ""}`}
-                  role="tab"
-                  aria-selected={selected}
-                  title={tab.cwd || tab.label}
-                >
-                  <button
-                    type="button"
-                    className="term-tab-main"
-                    onClick={() => void onSelectTerminal(tab.id)}
+          <div className="term-chrome">
+            <div className="term-tabs" role="tablist" aria-label={tr("term.tabsAria")}>
+              {(termTabs.length
+                ? termTabs
+                : activeTermId
+                  ? [
+                      {
+                        id: activeTermId,
+                        cwd: projectCwd,
+                        label: projectCwd
+                          ? projectCwd.split(/[/\\]/).pop() || "Terminal"
+                          : "Terminal",
+                      },
+                    ]
+                  : []
+              ).map((tab) => {
+                const selected = tab.id === activeTermId;
+                return (
+                  <div
+                    key={tab.id}
+                    className={`term-tab ${selected ? "active" : ""} ${tab.grokRunning ? "grok" : ""}`}
+                    role="tab"
+                    aria-selected={selected}
+                    title={tab.cwd || tab.label}
                   >
-                    <span className="term-tab-label">{tab.label || "Terminal"}</span>
-                    {tab.grokRunning ? (
-                      <span className="term-tab-badge">Grok</span>
-                    ) : null}
-                  </button>
-                  {termTabs.length > 1 ? (
                     <button
                       type="button"
-                      className="term-tab-close"
-                      title={tr("term.closeTitle")}
-                      aria-label={tr("term.closeAria", { name: tab.label })}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        void onCloseTerminal(tab.id);
-                      }}
+                      className="term-tab-main"
+                      onClick={() => void onSelectTerminal(tab.id)}
                     >
-                      ×
+                      <span className="term-tab-label">
+                        {tab.label || "Terminal"}
+                      </span>
+                      {tab.grokRunning ? (
+                        <span className="term-tab-badge">Grok</span>
+                      ) : null}
                     </button>
-                  ) : null}
-                </div>
-              );
-            })}
-            <button
-              type="button"
-              className="term-tab-add"
-              onClick={() => void onNewTerminal()}
-              disabled={termTabs.length >= maxTermSessions}
-              title={tr("term.addTitle")}
-              aria-label={tr("term.addAria")}
-            >
-              +
-            </button>
-            <span className="term-tabs-hint">{tr("pane.terminalHint")}</span>
+                    {termTabs.length > 1 ? (
+                      <button
+                        type="button"
+                        className="term-tab-close"
+                        title={tr("term.closeTitle")}
+                        aria-label={tr("term.closeAria", { name: tab.label })}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void onCloseTerminal(tab.id);
+                        }}
+                      >
+                        ×
+                      </button>
+                    ) : null}
+                  </div>
+                );
+              })}
+              <button
+                type="button"
+                className="term-tab-add"
+                onClick={() => void onNewTerminal()}
+                disabled={termTabs.length >= maxTermSessions}
+                title={tr("term.addTitle")}
+                aria-label={tr("term.addAria")}
+              >
+                +
+              </button>
+            </div>
+            {terminalScopedActions}
+            <span className="term-tabs-hint" title={tr("term.deliverHint")}>
+              {tr("term.activeHint", { tab: activeTabLabel })}
+            </span>
           </div>
           <div className="terminal-body terminal-body-full">
             {termTabs.length === 0 && activeTermId ? (
@@ -1572,6 +1619,7 @@ export default function App() {
               >
                 <span className="preview-chrome-label">{tr("pane.preview")}</span>
                 {urlNavForm}
+                {previewScopedActions}
                 <button
                   type="button"
                   className="icon-btn preview-collapse-btn"
