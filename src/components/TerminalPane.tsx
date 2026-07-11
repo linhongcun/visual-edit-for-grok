@@ -3,6 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { WebglAddon } from "@xterm/addon-webgl";
 import { trackpadScrollPixelsFromFrame } from "../trackpad-scroll.cjs";
 import "@xterm/xterm/css/xterm.css";
 
@@ -150,13 +151,14 @@ export default function TerminalPane({
     if (!hostRef.current || !window.vefg || !sessionId) return;
 
     const term = new Terminal({
-      // Blink forces continuous repaints and makes wheel-scroll feel laggy
+      // Blink forces continuous repaints; keep off for scroll smoothness
       cursorBlink: false,
       fontSize: TERM_FONT_SIZE,
       fontFamily: TERM_FONT_FAMILY,
-      lineHeight: 1.15,
+      // Integer-ish cell metrics help CJK + box-drawing table borders line up
+      lineHeight: 1.2,
       letterSpacing: 0,
-      // Box-drawing without heavy per-frame rescale
+      // Draw box-drawing glyphs on the atlas (needed for Grok markdown tables)
       customGlyphs: true,
       theme: {
         background: "#0a0c10",
@@ -185,15 +187,16 @@ export default function TerminalPane({
       scrollback: 5000,
       convertEol: false,
       windowsMode: false,
-      // Fallback only if custom handler cannot run
       scrollSensitivity: 3,
       fastScrollSensitivity: 8,
       smoothScrollDuration: 0,
-      rescaleOverlappingGlyphs: false,
+      // Restored: reduces “broken” table border / CJK overlap artifacts
+      rescaleOverlappingGlyphs: true,
     });
 
     const fit = new FitAddon();
     term.loadAddon(fit);
+    // Unicode 11 East Asian Width — required for CJK double-width vs ASCII table pipes
     const unicode11 = new Unicode11Addon();
     term.loadAddon(unicode11);
     term.unicode.activeVersion = "11";
@@ -205,7 +208,21 @@ export default function TerminalPane({
       }),
     );
     term.open(hostRef.current);
-    // Canvas renderer: WebGL + multi-tab + CJK was capping trackpad scroll FPS.
+    // WebGL: cleaner box-drawing for Grok tables; fall back to canvas if GPU path fails.
+    // Trackpad scroll no longer depends on renderer (viewport.scrollTop path).
+    try {
+      const webgl = new WebglAddon();
+      webgl.onContextLoss(() => {
+        try {
+          webgl.dispose();
+        } catch {
+          /* ignore */
+        }
+      });
+      term.loadAddon(webgl);
+    } catch {
+      /* canvas renderer remains */
+    }
     fit.fit();
 
     termRef.current = term;

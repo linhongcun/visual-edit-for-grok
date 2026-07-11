@@ -2,6 +2,14 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.6.6] — 2026-07-11
+
+### Restore CJK / markdown table border alignment
+
+- Re-enable WebGL renderer + `rescaleOverlappingGlyphs` (removed during scroll tuning)
+- Keep Unicode 11 widths, custom box-drawing glyphs, lineHeight 1.2
+- Trackpad scroll path unchanged (viewport.scrollTop + velocity gain)
+
 ## [0.6.5] — 2026-07-11
 
 ### Trackpad velocity that actually tracks flicks
