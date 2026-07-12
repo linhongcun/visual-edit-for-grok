@@ -2,6 +2,16 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.8.8] — 2026-07-12
+
+### playwright-mcp-inspired network request summary for Grok
+
+- `network_requests` fence: capped list of recent preview HTTP(S) requests (method/status/type/url)
+- Prefer failed + document/xhr/fetch/script; scrub secrets; no bodies/headers
+- Electron `session.webRequest` onCompleted/onErrorOccurred; clear ring on navigation start
+- Inventory: `docs/PLAYWRIGHT-MCP-INVENTORY.md`
+- Out of scope: Playwright automation, full HAR, request body dumps
+
 ## [0.8.7] — 2026-07-12
 
 ### Fix page_info geometry + fault scrubbing (browser-use follow-up)

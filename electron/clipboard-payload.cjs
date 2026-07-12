@@ -358,6 +358,22 @@ function buildClipboardPayload(opts = {}) {
     /* optional */
   }
 
+  // playwright-mcp browser_network_requests spirit: compact method/status/url list
+  try {
+    const { formatNetworkRequestsBlock } = require("./page-context.cjs");
+    const netBody = formatNetworkRequestsBlock(
+      opts.networkRequests || [],
+    );
+    if (netBody) {
+      lines.push("```network_requests");
+      lines.push(netBody);
+      lines.push("```");
+      lines.push("");
+    }
+  } catch {
+    /* optional */
+  }
+
   const normalizedDiffs = normalizeStyleDiffs(styleDiffs);
   if (normalizedDiffs.length) {
     lines.push("```style_diff");

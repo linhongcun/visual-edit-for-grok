@@ -93,10 +93,12 @@ const {
   shouldHideScrollbarsForCapture,
   HIDE_SCROLLBAR_CSS,
 } = require("./agent-snapshot.cjs");
-const { PageFaultRing } = require("./page-context.cjs");
+const { PageFaultRing, NetworkRequestRing } = require("./page-context.cjs");
 
 /** Recent preview page faults for Grok context (browser-use browser_errors spirit). */
 const previewFaultRing = new PageFaultRing({ maxSize: 20 });
+/** Recent network requests for Grok (playwright-mcp browser_network_requests spirit). */
+const previewNetworkRing = new NetworkRequestRing({ maxSize: 40 });
 
 /** Privacy-safe recent errors for diagnostics (Warp-inspired local ring buffer). */
 const stabilityBuffer = new StabilityErrorBuffer({ maxSize: 30 });
@@ -1320,6 +1322,38 @@ function createPreviewView() {
         buttons: ["OK"],
       });
     });
+    // playwright-mcp-style compact network log for Grok (no bodies/headers)
+    try {
+      const filter = { urls: ["http://*/*", "https://*/*"] };
+      previewSession.webRequest.onCompleted(filter, (details) => {
+        try {
+          previewNetworkRing.push({
+            url: details.url,
+            method: details.method,
+            status: details.statusCode,
+            resourceType: details.resourceType,
+            failed: details.statusCode >= 400,
+          });
+        } catch {
+          /* ignore */
+        }
+      });
+      previewSession.webRequest.onErrorOccurred(filter, (details) => {
+        try {
+          previewNetworkRing.push({
+            url: details.url,
+            method: details.method,
+            resourceType: details.resourceType,
+            error: details.error || "failed",
+            failed: true,
+          });
+        } catch {
+          /* ignore */
+        }
+      });
+    } catch (err) {
+      console.warn("preview webRequest hooks failed:", err);
+    }
   }
 
   previewView.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
@@ -1398,6 +1432,12 @@ function createPreviewView() {
 
   previewView.webContents.on("did-start-loading", () => {
     previewLoading = true;
+    // New page load → fresh network list (playwright-mcp "since loading the page")
+    try {
+      previewNetworkRing.clear();
+    } catch {
+      /* ignore */
+    }
     sendToRenderer("preview:status", previewStatusSnapshot());
   });
 
@@ -2085,6 +2125,7 @@ async function deliverCapture(
           intent,
           styleDiffs,
           pageFaults: previewFaultRing.list(8),
+          networkRequests: previewNetworkRing.list(12),
         });
   const image =
     screenshotPath && fs.existsSync(screenshotPath)
