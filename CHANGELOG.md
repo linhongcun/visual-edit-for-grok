@@ -2,6 +2,16 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.8.6] — 2026-07-12
+
+### browser-use-inspired page context for Grok
+
+- `page_info` fence: viewport / page size / scroll / pixels above-below (PageInfo spirit)
+- `page_faults` fence: capped ring of scrubbed preview `did-fail-load` + console error/warn
+- Pure helpers in `electron/page-context.cjs`; Aim captureContext includes document size
+- Inventory: `docs/BROWSER-USE-INVENTORY.md`
+- Out of scope: agent loop, CDP network pending list, full DOM serialize
+
 ## [0.8.5] — 2026-07-12
 
 ### agent-browser-inspired capture context

@@ -93,6 +93,10 @@ const {
   shouldHideScrollbarsForCapture,
   HIDE_SCROLLBAR_CSS,
 } = require("./agent-snapshot.cjs");
+const { PageFaultRing } = require("./page-context.cjs");
+
+/** Recent preview page faults for Grok context (browser-use browser_errors spirit). */
+const previewFaultRing = new PageFaultRing({ maxSize: 20 });
 
 /** Privacy-safe recent errors for diagnostics (Warp-inspired local ring buffer). */
 const stabilityBuffer = new StabilityErrorBuffer({ maxSize: 30 });
@@ -1403,6 +1407,14 @@ function createPreviewView() {
       if (!isMainFrame || code === -3) return;
       previewLoading = false;
       previewError = `${desc} (${code})`;
+      try {
+        previewFaultRing.push({
+          kind: "fail-load",
+          message: `${desc} (${code}) ${url || ""}`.trim(),
+        });
+      } catch {
+        /* ignore */
+      }
       sendToRenderer(
         "preview:status",
         previewStatusSnapshot({
@@ -1411,6 +1423,51 @@ function createPreviewView() {
       );
     },
   );
+
+  // Console errors/warnings → capped fault ring for Grok (browser-use spirit).
+  // Supports both classic (level, message, line, sourceId) and details-object APIs.
+  previewView.webContents.on("console-message", (event, levelOrDetails, message, line, sourceId) => {
+    let levelNum = -1;
+    let levelName = "";
+    let text = "";
+    let lineNo = null;
+    let source = "";
+    if (levelOrDetails && typeof levelOrDetails === "object") {
+      const d = levelOrDetails;
+      text = String(d.message ?? d.text ?? "");
+      levelNum = typeof d.level === "number" ? d.level : -1;
+      levelName = typeof d.level === "string" ? d.level : "";
+      lineNo = d.lineNumber ?? d.line ?? null;
+      source = String(d.sourceId ?? d.source ?? "");
+    } else {
+      levelNum = typeof levelOrDetails === "number" ? levelOrDetails : -1;
+      levelName = typeof levelOrDetails === "string" ? levelOrDetails : "";
+      text = String(message ?? "");
+      lineNo = line;
+      source = String(sourceId ?? "");
+    }
+    const isWarn =
+      levelName === "warning" ||
+      levelName === "warn" ||
+      levelNum === 2;
+    const isError =
+      levelName === "error" ||
+      levelNum >= 3;
+    if (!isWarn && !isError) return;
+    const kind = isWarn ? "console:warn" : "console:error";
+    const loc =
+      source || lineNo
+        ? ` @${source.slice(0, 80)}${lineNo != null ? `:${lineNo}` : ""}`
+        : "";
+    try {
+      previewFaultRing.push({
+        kind,
+        message: `${text}${loc}`,
+      });
+    } catch {
+      /* ignore */
+    }
+  });
 
   previewView.webContents.on("page-title-updated", () => {
     sendToRenderer("preview:status", previewStatusSnapshot());
@@ -2027,6 +2084,7 @@ async function deliverCapture(
           screenshotPath,
           intent,
           styleDiffs,
+          pageFaults: previewFaultRing.list(8),
         });
   const image =
     screenshotPath && fs.existsSync(screenshotPath)

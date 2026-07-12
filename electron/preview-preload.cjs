@@ -144,6 +144,18 @@ function keyStyles(el) {
 }
 
 function contextSnapshot() {
+  const doc = document.documentElement;
+  const body = document.body;
+  const pageWidth = Math.max(
+    doc?.scrollWidth || 0,
+    body?.scrollWidth || 0,
+    window.innerWidth || 0,
+  );
+  const pageHeight = Math.max(
+    doc?.scrollHeight || 0,
+    body?.scrollHeight || 0,
+    window.innerHeight || 0,
+  );
   return {
     navigationId,
     pageUrl: location.href,
@@ -151,7 +163,17 @@ function contextSnapshot() {
       width: window.innerWidth,
       height: window.innerHeight,
       devicePixelRatio: window.devicePixelRatio || 1,
+      pageWidth,
+      pageHeight,
     },
+    page: {
+      width: pageWidth,
+      height: pageHeight,
+      scrollWidth: pageWidth,
+      scrollHeight: pageHeight,
+    },
+    pageWidth,
+    pageHeight,
     scroll: {
       x: Math.round(window.scrollX || 0),
       y: Math.round(window.scrollY || 0),

@@ -202,7 +202,13 @@ function selectionContentFingerprint(selection) {
  * @returns {string}
  */
 function buildClipboardPayload(opts = {}) {
-  const { selection, screenshotPath, intent, styleDiffs } = opts;
+  const {
+    selection,
+    screenshotPath,
+    intent,
+    styleDiffs,
+    pageFaults,
+  } = opts;
   const lines = [];
 
   if (selection) {
@@ -305,12 +311,51 @@ function buildClipboardPayload(opts = {}) {
     } catch {
       /* snapshot helper optional */
     }
+
+    // browser-use PageInfo spirit: viewport/scroll/pixels above-below
+    try {
+      const {
+        pageInfoFromSelection,
+        formatPageInfoBlock,
+      } = require("./page-context.cjs");
+      const info = pageInfoFromSelection(selection);
+      const pageUrl =
+        selection.captureContext?.pageUrl ||
+        selection.context?.pageUrl ||
+        selection.pageUrl;
+      const block = formatPageInfoBlock(info, {
+        pageUrl,
+        pageTitle: selection.pageTitle,
+      });
+      if (block) {
+        lines.push("```page_info");
+        lines.push(block);
+        lines.push("```");
+        lines.push("");
+      }
+    } catch {
+      /* page-context optional */
+    }
   } else {
     lines.push("@");
     lines.push("```browser_element");
     lines.push("No DOM node selected (screenshot-only or empty capture).");
     lines.push("```");
     lines.push("");
+  }
+
+  // browser-use browser_errors spirit: recent scrubbed preview faults
+  try {
+    const { formatPageFaultsBlock } = require("./page-context.cjs");
+    const faultBody = formatPageFaultsBlock(pageFaults || []);
+    if (faultBody) {
+      lines.push("```page_faults");
+      lines.push(faultBody);
+      lines.push("```");
+      lines.push("");
+    }
+  } catch {
+    /* optional */
   }
 
   const normalizedDiffs = normalizeStyleDiffs(styleDiffs);
