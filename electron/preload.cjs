@@ -28,6 +28,8 @@ contextBridge.exposeInMainWorld("vefg", {
     ipcRenderer.invoke("capture:set-auto-paste", enabled),
   setFrameMode: (mode) => ipcRenderer.invoke("capture:set-frame-mode", mode),
   setLocale: (locale) => ipcRenderer.invoke("app:set-locale", locale),
+  setTermSettings: (partial) =>
+    ipcRenderer.invoke("app:set-term-settings", partial || {}),
   copyDiagnostics: () => ipcRenderer.invoke("app:copy-diagnostics"),
   checkUpdates: () => ipcRenderer.invoke("app:check-updates"),
   openExternal: (url) => ipcRenderer.invoke("shell:open-external", url),
@@ -46,6 +48,10 @@ contextBridge.exposeInMainWorld("vefg", {
     ipcRenderer.invoke("terminal:close", sessionId),
   terminalSetActive: (sessionId) =>
     ipcRenderer.invoke("terminal:set-active", sessionId),
+  terminalRename: (sessionId, label) =>
+    ipcRenderer.invoke("terminal:rename", { sessionId, label }),
+  terminalReorder: (orderedIds) =>
+    ipcRenderer.invoke("terminal:reorder", orderedIds || []),
   terminalStart: (opts) => ipcRenderer.invoke("terminal:start", opts || {}),
   terminalWrite: (dataOrOpts, sessionId) => {
     if (dataOrOpts && typeof dataOrOpts === "object" && "data" in dataOrOpts) {
@@ -84,6 +90,8 @@ contextBridge.exposeInMainWorld("vefg", {
       "terminal:sessions",
       "terminal:focus-request",
       "app:locale",
+      "app:menu-action",
+      "app:term-settings",
     ];
     if (!allowed.includes(channel)) return () => {};
     const listener = (_event, payload) => handler(payload);

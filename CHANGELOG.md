@@ -2,6 +2,31 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.7.0] — 2026-07-12
+
+### Warp-inspired terminal host UX (A+B+C)
+
+**Boundary:** we remain a Grok TUI sidecar + preview — not a Warp clone. Ideas only (no AGPL code).
+
+#### Wave A — power tools
+- Find in terminal (`⌘F` / `⌘G` / `⇧⌘G`) via `@xterm/addon-search`
+- Link hover tooltips for OSC 8 + plain URLs (click → preview, ⌘-click → browser)
+- Terminal font zoom `⌘+/−/0` with persisted `termFontSize`
+- App menu: Terminal / Capture / View accelerators
+
+#### Wave B — workspace polish
+- Tab double-click rename + drag reorder
+- Settings: copy-on-select, scrollback, link tooltip, notify on Grok exit
+- Terminal context menu (copy / find / open link)
+- OS notification when a session exits while the window is unfocused
+
+#### Wave C — discoverability
+- Command palette (`⌘K`)
+- Keyboard shortcuts sheet (`⌘/`)
+- `docs/WARP-INSPIRED.md`
+
+Settings store **v3**. See docs for adopted vs rejected Warp patterns.
+
 ## [0.6.11] — 2026-07-12
 
 ### Fix OSC 8 link click → in-app preview (no warning dialog)

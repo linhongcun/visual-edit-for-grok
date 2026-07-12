@@ -7,7 +7,10 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
-import TerminalPane from "./components/TerminalPane";
+import TerminalPane, {
+  type TerminalSearchApi,
+} from "./components/TerminalPane";
+import TerminalFindBar from "./components/TerminalFindBar";
 import {
   IconCamera,
   IconChevronLeft,
@@ -21,6 +24,12 @@ import {
   IconRefresh,
   IconSend,
 } from "./components/Icons";
+import {
+  clampTermFontSize,
+  nextTermFontSize,
+  TERM_FONT_SIZE_DEFAULT,
+  TERM_SCROLLBACK_DEFAULT,
+} from "./term-settings.cjs";
 import type {
   CaptureResult,
   ElementSelection,
@@ -235,6 +244,29 @@ export default function App() {
   const localeRef = useRef(locale);
   const dragging = useRef(false);
 
+  // Terminal host prefs (Warp-inspired Wave A/B)
+  const [termFontSize, setTermFontSize] = useState(TERM_FONT_SIZE_DEFAULT);
+  const [linkTooltip, setLinkTooltip] = useState(true);
+  const [copyOnSelect, setCopyOnSelect] = useState(false);
+  const [termScrollback, setTermScrollback] = useState(TERM_SCROLLBACK_DEFAULT);
+  const [notifyOnGrokExit, setNotifyOnGrokExit] = useState(true);
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState("");
+  const [findCaseSensitive, setFindCaseSensitive] = useState(false);
+  const [findResultIndex, setFindResultIndex] = useState(-1);
+  const [findResultCount, setFindResultCount] = useState(0);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [paletteQuery, setPaletteQuery] = useState("");
+  const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+  const [dragTabId, setDragTabId] = useState<string | null>(null);
+  const searchApisRef = useRef(new Map<string, TerminalSearchApi>());
+  const findQueryRef = useRef(findQuery);
+  const findCaseRef = useRef(findCaseSensitive);
+  const findOpenRef = useRef(findOpen);
+
   function requestTerminalFit() {
     setTermFitNonce((n) => n + 1);
   }
@@ -247,6 +279,16 @@ export default function App() {
   const togglePickRef = useRef(async () => {});
   const onScreenshotRef = useRef(async () => {});
   const onResendRef = useRef(async () => {});
+  const handleMenuActionRef = useRef<(action: string) => void>(() => {});
+  const applyTermHostSettingsRef = useRef<
+    (s: {
+      termFontSize?: number;
+      linkTooltip?: boolean;
+      copyOnSelect?: boolean;
+      termScrollback?: number;
+      notifyOnGrokExit?: boolean;
+    }) => void
+  >(() => {});
 
   useEffect(() => {
     selectionRef.current = selection;
@@ -263,6 +305,189 @@ export default function App() {
   useEffect(() => {
     activeTermIdRef.current = activeTermId;
   }, [activeTermId]);
+
+  useEffect(() => {
+    findQueryRef.current = findQuery;
+  }, [findQuery]);
+
+  useEffect(() => {
+    findCaseRef.current = findCaseSensitive;
+  }, [findCaseSensitive]);
+
+  useEffect(() => {
+    findOpenRef.current = findOpen;
+  }, [findOpen]);
+
+  function registerSearchApi(sessionId: string, api: TerminalSearchApi | null) {
+    if (api) searchApisRef.current.set(sessionId, api);
+    else searchApisRef.current.delete(sessionId);
+  }
+
+  function activeSearchApi(): TerminalSearchApi | null {
+    const id = activeTermIdRef.current;
+    if (!id) return null;
+    return searchApisRef.current.get(id) || null;
+  }
+
+  function runFind(direction: "next" | "prev", query = findQueryRef.current) {
+    const api = activeSearchApi();
+    if (!api) return;
+    const q = query.trim();
+    if (!q) {
+      api.clearDecorations();
+      setFindResultIndex(-1);
+      setFindResultCount(0);
+      return;
+    }
+    const opts = { caseSensitive: findCaseRef.current };
+    if (direction === "prev") api.findPrevious(q, opts);
+    else api.findNext(q, { ...opts, incremental: true });
+  }
+
+  function openFindBar() {
+    setFindOpen(true);
+    // Re-run on current selection if any text selected in terminal is hard;
+    // just focus the bar.
+  }
+
+  function closeFindBar() {
+    setFindOpen(false);
+    activeSearchApi()?.clearDecorations();
+    setFindResultIndex(-1);
+    setFindResultCount(0);
+    focusGrokTerminal();
+  }
+
+  async function persistTermSettings(
+    partial: Partial<{
+      termFontSize: number;
+      linkTooltip: boolean;
+      copyOnSelect: boolean;
+      termScrollback: number;
+      notifyOnGrokExit: boolean;
+    }>,
+  ) {
+    if (!isElectron()) return;
+    try {
+      const next = await window.vefg.setTermSettings(partial);
+      applyTermHostSettings(next);
+    } catch (err) {
+      toastError(err);
+    }
+  }
+
+  function applyTermHostSettings(s: {
+    termFontSize?: number;
+    linkTooltip?: boolean;
+    copyOnSelect?: boolean;
+    termScrollback?: number;
+    notifyOnGrokExit?: boolean;
+  }) {
+    if (typeof s.termFontSize === "number") {
+      setTermFontSize(clampTermFontSize(s.termFontSize));
+    }
+    if (typeof s.linkTooltip === "boolean") setLinkTooltip(s.linkTooltip);
+    if (typeof s.copyOnSelect === "boolean") setCopyOnSelect(s.copyOnSelect);
+    if (typeof s.termScrollback === "number") {
+      setTermScrollback(s.termScrollback);
+    }
+    if (typeof s.notifyOnGrokExit === "boolean") {
+      setNotifyOnGrokExit(s.notifyOnGrokExit);
+    }
+  }
+
+  function changeFont(delta: 1 | -1 | 0) {
+    const next = nextTermFontSize(termFontSize, delta);
+    setTermFontSize(next);
+    void persistTermSettings({ termFontSize: next });
+    showToast(tr("toast.fontSize", { size: String(next) }));
+  }
+
+  function handleMenuAction(action: string) {
+    switch (action) {
+      case "find":
+        openFindBar();
+        break;
+      case "find-next":
+        if (!findOpenRef.current) openFindBar();
+        runFind("next");
+        break;
+      case "find-prev":
+        if (!findOpenRef.current) openFindBar();
+        runFind("prev");
+        break;
+      case "new-tab":
+        void onNewTerminal();
+        break;
+      case "close-tab":
+        if (activeTermIdRef.current) void onCloseTerminal(activeTermIdRef.current);
+        break;
+      case "focus-terminal":
+        focusGrokTerminal();
+        break;
+      case "focus-preview":
+        document.getElementById("preview-url-input")?.focus();
+        break;
+      case "font-larger":
+        changeFont(1);
+        break;
+      case "font-smaller":
+        changeFont(-1);
+        break;
+      case "font-reset":
+        changeFont(0);
+        break;
+      case "toggle-preview":
+        void applyPreviewCollapsed(!previewCollapsedRef.current);
+        break;
+      case "aim":
+        void togglePickRef.current();
+        break;
+      case "frame":
+        void onScreenshotRef.current();
+        break;
+      case "resend":
+        void onResendRef.current();
+        break;
+      case "settings":
+        setSettingsOpen(true);
+        setPaletteOpen(false);
+        setShortcutsOpen(false);
+        break;
+      case "palette":
+        setPaletteOpen(true);
+        setPaletteQuery("");
+        setSettingsOpen(false);
+        setShortcutsOpen(false);
+        break;
+      case "shortcuts":
+        setShortcutsOpen(true);
+        setSettingsOpen(false);
+        setPaletteOpen(false);
+        break;
+      default:
+        break;
+    }
+  }
+
+  useEffect(() => {
+    handleMenuActionRef.current = handleMenuAction;
+  });
+
+  useEffect(() => {
+    applyTermHostSettingsRef.current = applyTermHostSettings;
+  });
+
+  // Subscribe search results for the active tab when find is open
+  useEffect(() => {
+    if (!findOpen || !activeTermId) return;
+    const api = searchApisRef.current.get(activeTermId);
+    if (!api) return;
+    return api.onResults(({ resultIndex, resultCount }) => {
+      setFindResultIndex(resultIndex);
+      setFindResultCount(resultCount);
+    });
+  }, [findOpen, activeTermId, termTabs.length]);
 
   /**
    * Bind Folder / Start Grok / status pills to the *active* tab only.
@@ -573,6 +798,13 @@ export default function App() {
           setLocale(loc);
           localeRef.current = loc;
         }
+        applyTermHostSettings({
+          termFontSize: s.termFontSize,
+          linkTooltip: s.linkTooltip,
+          copyOnSelect: s.copyOnSelect,
+          termScrollback: s.termScrollback,
+          notifyOnGrokExit: s.notifyOnGrokExit,
+        });
 
         const saved = s.lastCapture || s.lastCaptureMeta;
         if (saved || s.lastSelection || s.lastScreenshotPath) {
@@ -769,6 +1001,7 @@ export default function App() {
       if (e.key === "Escape" && pickModeRef.current) {
         e.preventDefault();
         void api.setPickMode(false);
+        return;
       }
       // ⌘⇧A Aim · ⌘⇧F Frame · ⌘⇧V Re-send — same busy single-flight as buttons
       if ((e.metaKey || e.ctrlKey) && e.shiftKey) {
@@ -789,6 +1022,27 @@ export default function App() {
       }
     };
     window.addEventListener("keydown", onKey);
+
+    const offMenu = api.on("app:menu-action", (payload) => {
+      const action = String(
+        (payload as { action?: string })?.action || "",
+      ).toLowerCase();
+      handleMenuActionRef.current?.(action);
+    });
+    offs.push(offMenu);
+
+    const offTermSettings = api.on("app:term-settings", (payload) => {
+      applyTermHostSettingsRef.current?.(
+        payload as {
+          termFontSize?: number;
+          linkTooltip?: boolean;
+          copyOnSelect?: boolean;
+          termScrollback?: number;
+          notifyOnGrokExit?: boolean;
+        },
+      );
+    });
+    offs.push(offTermSettings);
 
     return () => {
       offs.forEach((off) => off());
@@ -1380,6 +1634,7 @@ export default function App() {
         <IconRefresh />
       </button>
       <input
+        id="preview-url-input"
         className="url-input"
         value={urlInput}
         list="recent-preview-urls"
@@ -1985,26 +2240,99 @@ export default function App() {
                   : []
               ).map((tab) => {
                 const selected = tab.id === activeTermId;
+                const isRenaming = renamingTabId === tab.id;
                 return (
                   <div
                     key={tab.id}
-                    className={`term-tab ${selected ? "active" : ""} ${tab.grokRunning ? "grok" : ""}`}
+                    className={`term-tab ${selected ? "active" : ""} ${tab.grokRunning ? "grok" : ""} ${dragTabId === tab.id ? "is-dragging" : ""}`}
                     role="tab"
                     aria-selected={selected}
-                    title={tab.cwd || tab.label}
+                    title={
+                      isRenaming
+                        ? tr("term.renameHint")
+                        : tab.cwd || tab.label
+                    }
+                    draggable={!isRenaming && termTabs.length > 1}
+                    onDragStart={(e) => {
+                      setDragTabId(tab.id);
+                      e.dataTransfer.setData("text/plain", tab.id);
+                      e.dataTransfer.effectAllowed = "move";
+                    }}
+                    onDragEnd={() => setDragTabId(null)}
+                    onDragOver={(e) => {
+                      if (!dragTabId || dragTabId === tab.id) return;
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "move";
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      const fromId =
+                        e.dataTransfer.getData("text/plain") || dragTabId;
+                      setDragTabId(null);
+                      if (!fromId || fromId === tab.id) return;
+                      const ids = termTabs.map((t) => t.id);
+                      const from = ids.indexOf(fromId);
+                      const to = ids.indexOf(tab.id);
+                      if (from < 0 || to < 0) return;
+                      const next = [...ids];
+                      next.splice(from, 1);
+                      next.splice(to, 0, fromId);
+                      void window.vefg
+                        .terminalReorder(next)
+                        .then((res) => applyTerminalSessions(res))
+                        .catch(toastError);
+                    }}
                   >
-                    <button
-                      type="button"
-                      className="term-tab-main"
-                      onClick={() => void onSelectTerminal(tab.id)}
-                    >
-                      <span className="term-tab-label">
-                        {tab.displayLabel || tab.label || "Terminal"}
-                      </span>
-                      {tab.grokRunning ? (
-                        <span className="term-tab-badge">Grok</span>
-                      ) : null}
-                    </button>
+                    {isRenaming ? (
+                      <input
+                        className="term-tab-rename"
+                        value={renameDraft}
+                        autoFocus
+                        maxLength={48}
+                        aria-label={tr("term.renameAria")}
+                        onChange={(e) => setRenameDraft(e.target.value)}
+                        onBlur={() => {
+                          const next = renameDraft.trim();
+                          setRenamingTabId(null);
+                          if (!next || next === tab.label) return;
+                          void window.vefg
+                            .terminalRename(tab.id, next)
+                            .then((res) => applyTerminalSessions(res))
+                            .catch(toastError);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            (e.target as HTMLInputElement).blur();
+                          } else if (e.key === "Escape") {
+                            e.preventDefault();
+                            setRenamingTabId(null);
+                          }
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        className="term-tab-main"
+                        onClick={() => void onSelectTerminal(tab.id)}
+                        onDoubleClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setRenamingTabId(tab.id);
+                          setRenameDraft(
+                            tab.displayLabel || tab.label || "Terminal",
+                          );
+                        }}
+                      >
+                        <span className="term-tab-label">
+                          {tab.displayLabel || tab.label || "Terminal"}
+                        </span>
+                        {tab.grokRunning ? (
+                          <span className="term-tab-badge">Grok</span>
+                        ) : null}
+                      </button>
+                    )}
                     {termTabs.length > 1 ? (
                       <button
                         type="button"
@@ -2045,6 +2373,35 @@ export default function App() {
               {tr("term.activeHint", { tab: activeTabLabel })}
             </span>
           </div>
+          <TerminalFindBar
+            open={findOpen}
+            query={findQuery}
+            caseSensitive={findCaseSensitive}
+            resultIndex={findResultIndex}
+            resultCount={findResultCount}
+            onQueryChange={(q) => {
+              setFindQuery(q);
+              findQueryRef.current = q;
+              runFind("next", q);
+            }}
+            onCaseSensitiveChange={(v) => {
+              setFindCaseSensitive(v);
+              findCaseRef.current = v;
+              runFind("next", findQueryRef.current);
+            }}
+            onFindNext={() => runFind("next")}
+            onFindPrevious={() => runFind("prev")}
+            onClose={closeFindBar}
+            labels={{
+              placeholder: tr("find.placeholder"),
+              next: tr("find.next"),
+              prev: tr("find.prev"),
+              close: tr("find.close"),
+              caseSensitive: tr("find.case"),
+              noResults: tr("find.noResults"),
+              results: tr("find.results"),
+            }}
+          />
           <div className="terminal-body terminal-body-full">
             {termTabs.length === 0 && activeTermId ? (
               <TerminalPane
@@ -2052,6 +2409,22 @@ export default function App() {
                 active
                 focusNonce={termFocusNonce}
                 fitNonce={termFitNonce}
+                fontSize={termFontSize}
+                scrollback={termScrollback}
+                linkTooltip={linkTooltip}
+                copyOnSelect={copyOnSelect}
+                onSearchApi={registerSearchApi}
+                onRequestFind={openFindBar}
+                linkTooltipLabels={{
+                  openPreview: tr("link.tipPreview"),
+                  openSystem: tr("link.tipSystem"),
+                }}
+                contextMenuLabels={{
+                  copy: tr("ctx.copy"),
+                  find: tr("ctx.find"),
+                  openPreview: tr("ctx.openPreview"),
+                  openSystem: tr("ctx.openSystem"),
+                }}
                 onOpenHttpUrl={(url) => {
                   void openPreviewUrl(url, { fromTerminal: true });
                 }}
@@ -2077,6 +2450,22 @@ export default function App() {
                     tab.id === activeTermId ? termFocusNonce : 0
                   }
                   fitNonce={tab.id === activeTermId ? termFitNonce : 0}
+                  fontSize={termFontSize}
+                  scrollback={termScrollback}
+                  linkTooltip={linkTooltip}
+                  copyOnSelect={copyOnSelect}
+                  onSearchApi={registerSearchApi}
+                  onRequestFind={openFindBar}
+                  linkTooltipLabels={{
+                    openPreview: tr("link.tipPreview"),
+                    openSystem: tr("link.tipSystem"),
+                  }}
+                  contextMenuLabels={{
+                    copy: tr("ctx.copy"),
+                    find: tr("ctx.find"),
+                    openPreview: tr("ctx.openPreview"),
+                    openSystem: tr("ctx.openSystem"),
+                  }}
                   onOpenHttpUrl={(url) => {
                     void openPreviewUrl(url, { fromTerminal: true });
                   }}
@@ -2141,6 +2530,263 @@ export default function App() {
           </>
         ) : null}
       </div>
+
+      {settingsOpen ? (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onClick={() => setSettingsOpen(false)}
+        >
+          <div
+            className="modal-sheet"
+            role="dialog"
+            aria-label={tr("settings.title")}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <header className="modal-header">
+              <h2>{tr("settings.title")}</h2>
+              <button
+                type="button"
+                className="btn btn-ghost btn-compact"
+                onClick={() => setSettingsOpen(false)}
+              >
+                ×
+              </button>
+            </header>
+            <div className="modal-body settings-body">
+              <label className="settings-row">
+                <span>{tr("settings.fontSize")}</span>
+                <input
+                  type="number"
+                  min={10}
+                  max={22}
+                  value={termFontSize}
+                  onChange={(e) => {
+                    const next = clampTermFontSize(Number(e.target.value));
+                    setTermFontSize(next);
+                    void persistTermSettings({ termFontSize: next });
+                  }}
+                />
+              </label>
+              <label className="settings-row">
+                <span>{tr("settings.scrollback")}</span>
+                <input
+                  type="number"
+                  min={1000}
+                  max={50000}
+                  step={1000}
+                  value={termScrollback}
+                  onChange={(e) => {
+                    const next = Number(e.target.value) || TERM_SCROLLBACK_DEFAULT;
+                    setTermScrollback(next);
+                    void persistTermSettings({ termScrollback: next });
+                  }}
+                />
+              </label>
+              <label className="settings-row settings-check">
+                <input
+                  type="checkbox"
+                  checked={linkTooltip}
+                  onChange={(e) => {
+                    setLinkTooltip(e.target.checked);
+                    void persistTermSettings({ linkTooltip: e.target.checked });
+                  }}
+                />
+                <span>{tr("settings.linkTooltip")}</span>
+              </label>
+              <label className="settings-row settings-check">
+                <input
+                  type="checkbox"
+                  checked={copyOnSelect}
+                  onChange={(e) => {
+                    setCopyOnSelect(e.target.checked);
+                    void persistTermSettings({ copyOnSelect: e.target.checked });
+                  }}
+                />
+                <span>{tr("settings.copyOnSelect")}</span>
+              </label>
+              <label className="settings-row settings-check">
+                <input
+                  type="checkbox"
+                  checked={notifyOnGrokExit}
+                  onChange={(e) => {
+                    setNotifyOnGrokExit(e.target.checked);
+                    void persistTermSettings({
+                      notifyOnGrokExit: e.target.checked,
+                    });
+                  }}
+                />
+                <span>{tr("settings.notifyOnGrokExit")}</span>
+              </label>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {paletteOpen ? (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onClick={() => setPaletteOpen(false)}
+        >
+          <div
+            className="modal-sheet palette-sheet"
+            role="dialog"
+            aria-label={tr("palette.title")}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.preventDefault();
+                setPaletteOpen(false);
+              }
+            }}
+          >
+            <input
+              className="palette-input"
+              autoFocus
+              value={paletteQuery}
+              placeholder={tr("palette.placeholder")}
+              onChange={(e) => setPaletteQuery(e.target.value)}
+              spellCheck={false}
+            />
+            <ul className="palette-list">
+              {[
+                {
+                  id: "find",
+                  label: tr("palette.find"),
+                  run: () => {
+                    setPaletteOpen(false);
+                    openFindBar();
+                  },
+                },
+                {
+                  id: "aim",
+                  label: tr("palette.aim"),
+                  run: () => {
+                    setPaletteOpen(false);
+                    void togglePickRef.current();
+                  },
+                },
+                {
+                  id: "frame",
+                  label: tr("palette.frame"),
+                  run: () => {
+                    setPaletteOpen(false);
+                    void onScreenshotRef.current();
+                  },
+                },
+                {
+                  id: "resend",
+                  label: tr("palette.resend"),
+                  run: () => {
+                    setPaletteOpen(false);
+                    void onResendRef.current();
+                  },
+                },
+                {
+                  id: "new-tab",
+                  label: tr("palette.newTab"),
+                  run: () => {
+                    setPaletteOpen(false);
+                    void onNewTerminal();
+                  },
+                },
+                {
+                  id: "settings",
+                  label: tr("palette.settings"),
+                  run: () => {
+                    setPaletteOpen(false);
+                    setSettingsOpen(true);
+                  },
+                },
+                {
+                  id: "shortcuts",
+                  label: tr("palette.shortcuts"),
+                  run: () => {
+                    setPaletteOpen(false);
+                    setShortcutsOpen(true);
+                  },
+                },
+                {
+                  id: "toggle-preview",
+                  label: tr("palette.togglePreview"),
+                  run: () => {
+                    setPaletteOpen(false);
+                    void applyPreviewCollapsed(!previewCollapsedRef.current);
+                  },
+                },
+              ]
+                .filter((item) => {
+                  const q = paletteQuery.trim().toLowerCase();
+                  if (!q) return true;
+                  return item.label.toLowerCase().includes(q);
+                })
+                .map((item) => (
+                  <li key={item.id}>
+                    <button
+                      type="button"
+                      className="palette-item"
+                      onClick={() => item.run()}
+                    >
+                      {item.label}
+                    </button>
+                  </li>
+                ))}
+            </ul>
+          </div>
+        </div>
+      ) : null}
+
+      {shortcutsOpen ? (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onClick={() => setShortcutsOpen(false)}
+        >
+          <div
+            className="modal-sheet"
+            role="dialog"
+            aria-label={tr("shortcuts.title")}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <header className="modal-header">
+              <h2>{tr("shortcuts.title")}</h2>
+              <button
+                type="button"
+                className="btn btn-ghost btn-compact"
+                onClick={() => setShortcutsOpen(false)}
+              >
+                ×
+              </button>
+            </header>
+            <div className="modal-body shortcuts-body">
+              <dl>
+                {(
+                  [
+                    ["⌘F", "shortcuts.find"],
+                    ["⌘G / ⇧⌘G", "shortcuts.findNav"],
+                    ["⌘T / ⌘W", "shortcuts.tabs"],
+                    ["⌘+ / ⌘- / ⌘0", "shortcuts.font"],
+                    ["⌘1 / ⌘2", "shortcuts.focus"],
+                    ["⌘⇧A / ⌘⇧F / ⌘⇧V", "shortcuts.capture"],
+                    ["⌘⇧P", "shortcuts.preview"],
+                    ["⌘K", "shortcuts.palette"],
+                    ["⌘,", "shortcuts.settings"],
+                    ["⌘/", "shortcuts.this"],
+                  ] as const
+                ).map(([keys, labelKey]) => (
+                  <div className="shortcut-row" key={labelKey}>
+                    <dt>
+                      <kbd>{keys}</kbd>
+                    </dt>
+                    <dd>{tr(labelKey)}</dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

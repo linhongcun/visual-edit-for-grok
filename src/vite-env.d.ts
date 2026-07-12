@@ -70,6 +70,11 @@ export interface VefgApi {
     lastCapture?: CaptureReceiptState | null;
     lastCaptureMeta?: CaptureReceiptState | null;
     layout: LayoutBounds;
+    termFontSize?: number;
+    linkTooltip?: boolean;
+    copyOnSelect?: boolean;
+    termScrollback?: number;
+    notifyOnGrokExit?: boolean;
   }>;
   navigate: (url: string) => Promise<{ ok: boolean; status?: PreviewStatus }>;
   reload: () => Promise<{ ok: boolean; status?: PreviewStatus }>;
@@ -123,6 +128,19 @@ export interface VefgApi {
   setAutoPaste: (enabled: boolean) => Promise<{ autoPasteTerminal: boolean }>;
   setFrameMode: (mode: FrameMode) => Promise<{ frameMode: FrameMode }>;
   setLocale: (locale: "en" | "zh" | string) => Promise<{ locale: "en" | "zh" }>;
+  setTermSettings: (partial: {
+    termFontSize?: number;
+    linkTooltip?: boolean;
+    copyOnSelect?: boolean;
+    termScrollback?: number;
+    notifyOnGrokExit?: boolean;
+  }) => Promise<{
+    termFontSize: number;
+    linkTooltip: boolean;
+    copyOnSelect: boolean;
+    termScrollback: number;
+    notifyOnGrokExit: boolean;
+  }>;
   copyDiagnostics: () => Promise<{ ok: boolean }>;
   checkUpdates: () => Promise<{ ok: boolean }>;
   openExternal: (url: string) => Promise<{ ok: boolean }>;
@@ -183,6 +201,17 @@ export interface VefgApi {
     activeId: string | null;
   }>;
   terminalSetActive: (sessionId: string) => Promise<{
+    sessions: Array<{ id: string; cwd: string; label: string }>;
+    activeId: string | null;
+  }>;
+  terminalRename: (
+    sessionId: string,
+    label: string,
+  ) => Promise<{
+    sessions: Array<{ id: string; cwd: string; label: string }>;
+    activeId: string | null;
+  }>;
+  terminalReorder: (orderedIds: string[]) => Promise<{
     sessions: Array<{ id: string; cwd: string; label: string }>;
     activeId: string | null;
   }>;

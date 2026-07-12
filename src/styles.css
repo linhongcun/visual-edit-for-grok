@@ -1138,6 +1138,55 @@ code {
   white-space: nowrap;
 }
 
+.term-tab.is-dragging {
+  opacity: 0.55;
+}
+
+.term-tab-rename {
+  width: 88px;
+  height: 22px;
+  margin: 0 4px;
+  padding: 0 6px;
+  border-radius: 4px;
+  border: 1px solid var(--color-ring);
+  background: var(--color-background);
+  font-size: 11px;
+}
+
+.term-context-menu {
+  position: absolute;
+  z-index: 30;
+  min-width: 160px;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--color-border) 55%, transparent);
+  background: var(--color-card);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.term-context-menu button {
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: var(--color-foreground);
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.term-context-menu button:hover:not(:disabled) {
+  background: var(--color-muted);
+}
+
+.term-context-menu button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .term-tab-badge {
   flex-shrink: 0;
   font-size: 9px;
@@ -1242,6 +1291,7 @@ code {
 
 /* Full host so FitAddon measures all available columns for wide TUI tables */
 .terminal-host {
+  position: relative;
   flex: 1;
   min-height: 0;
   /* Less horizontal padding → more terminal columns for CJK tables */
@@ -1261,6 +1311,215 @@ code {
   scroll-behavior: auto;
   /* Avoid macOS rubber-banding stealing wheel momentum inside the terminal */
   -webkit-overflow-scrolling: auto;
+}
+
+/* Terminal find bar (Warp-inspired host UX) */
+.term-find-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 6px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 50%, transparent);
+  background: color-mix(in srgb, var(--color-card) 92%, #0a0c10);
+  z-index: 5;
+}
+
+.term-find-input {
+  flex: 1 1 auto;
+  min-width: 120px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
+  background: var(--color-background);
+  color: var(--color-foreground);
+  outline: none;
+}
+
+.term-find-input:focus {
+  border-color: var(--color-ring);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-ring) 40%, transparent);
+}
+
+.term-find-case {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--color-muted-fg);
+  user-select: none;
+  cursor: pointer;
+}
+
+.term-find-status {
+  min-width: 64px;
+  text-align: right;
+  font-size: 11px;
+  color: var(--color-muted-fg);
+  font-variant-numeric: tabular-nums;
+}
+
+.term-link-tooltip {
+  position: absolute;
+  z-index: 20;
+  max-width: min(420px, 90%);
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
+  background: color-mix(in srgb, #0b1220 92%, #1e293b);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  transform: translateY(0);
+}
+
+.term-link-tooltip-url {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: #93b4ff;
+  word-break: break-all;
+}
+
+.term-link-tooltip-hint {
+  margin-top: 4px;
+  font-size: 10px;
+  color: var(--color-muted-fg);
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 12vh 16px 16px;
+  background: rgba(2, 6, 23, 0.55);
+  backdrop-filter: blur(2px);
+}
+
+.modal-sheet {
+  width: min(440px, 100%);
+  max-height: min(70vh, 640px);
+  overflow: auto;
+  border-radius: var(--radius-lg);
+  border: 1px solid color-mix(in srgb, var(--color-border) 55%, transparent);
+  background: var(--color-card);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 40%, transparent);
+}
+
+.modal-header h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.modal-body {
+  padding: 12px 14px 16px;
+}
+
+.settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.settings-row input[type="number"] {
+  width: 88px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
+  background: var(--color-background);
+}
+
+.settings-check {
+  justify-content: flex-start;
+}
+
+.palette-sheet {
+  width: min(520px, 100%);
+  padding: 10px;
+}
+
+.palette-input {
+  width: 100%;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: var(--radius);
+  border: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
+  background: var(--color-background);
+  outline: none;
+}
+
+.palette-input:focus {
+  border-color: var(--color-ring);
+}
+
+.palette-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.palette-item {
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-foreground);
+  cursor: pointer;
+}
+
+.palette-item:hover,
+.palette-item:focus-visible {
+  background: var(--color-muted);
+  outline: none;
+}
+
+.shortcuts-body .shortcut-row {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 30%, transparent);
+}
+
+.shortcuts-body kbd {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
+  background: var(--color-background);
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--color-muted-fg);
+}
+
+.shortcuts-body dd {
+  margin: 0;
+  font-size: 12px;
 }
 
 .terminal-host .xterm-screen {

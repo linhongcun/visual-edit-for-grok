@@ -8,6 +8,7 @@ const {
   shell,
   dialog,
   Menu,
+  Notification,
 } = require("electron");
 const path = require("path");
 const fs = require("fs");
@@ -153,6 +154,23 @@ function persistDebounced(partial, { force = false } = {}) {
   return persist(batch);
 }
 
+/** Terminal host prefs (Wave A/B settings). Loaded from settings-store. */
+let termFontSize = 12;
+let linkTooltip = true;
+let copyOnSelect = false;
+let termScrollback = 10000;
+let notifyOnGrokExit = true;
+
+function termHostSettingsSnapshot() {
+  return {
+    termFontSize,
+    linkTooltip,
+    copyOnSelect,
+    termScrollback,
+    notifyOnGrokExit,
+  };
+}
+
 function applyLoadedSettings() {
   const s = loadSettings(settingsFile());
   if (s.previewUrl) previewUrl = s.previewUrl;
@@ -166,6 +184,13 @@ function applyLoadedSettings() {
   viewportPresetId = normalizeViewportPreset(s.viewportPreset);
   viewportOrientation = s.viewportOrientation === "landscape" ? "landscape" : "portrait";
   privateMode = Boolean(s.privateMode);
+  if (typeof s.termFontSize === "number") termFontSize = s.termFontSize;
+  if (typeof s.linkTooltip === "boolean") linkTooltip = s.linkTooltip;
+  if (typeof s.copyOnSelect === "boolean") copyOnSelect = s.copyOnSelect;
+  if (typeof s.termScrollback === "number") termScrollback = s.termScrollback;
+  if (typeof s.notifyOnGrokExit === "boolean") {
+    notifyOnGrokExit = s.notifyOnGrokExit;
+  }
   // Empty locale = first run → detect system language and persist
   if (s.locale === "en" || s.locale === "zh") {
     uiLocale = s.locale;
@@ -641,6 +666,11 @@ function bindAppShortcuts(webContents) {
   });
 }
 
+/** Dispatch menu / accelerator actions to the renderer (and some main handlers). */
+function emitMenuAction(action) {
+  sendToRenderer("app:menu-action", { action: String(action || "") });
+}
+
 function installAppMenu() {
   const isMac = process.platform === "darwin";
   const template = [
@@ -672,6 +702,84 @@ function installAppMenu() {
         { role: "copy" },
         { role: "paste" },
         { role: "selectAll" },
+        { type: "separator" },
+        {
+          label: "Find in Terminal",
+          accelerator: "CommandOrControl+F",
+          click: () => emitMenuAction("find"),
+        },
+        {
+          label: "Find Next",
+          accelerator: "CommandOrControl+G",
+          click: () => emitMenuAction("find-next"),
+        },
+        {
+          label: "Find Previous",
+          accelerator: "CommandOrControl+Shift+G",
+          click: () => emitMenuAction("find-prev"),
+        },
+      ],
+    },
+    {
+      label: "Terminal",
+      submenu: [
+        {
+          label: "New Tab",
+          accelerator: "CommandOrControl+T",
+          click: () => emitMenuAction("new-tab"),
+        },
+        {
+          label: "Close Tab",
+          accelerator: "CommandOrControl+W",
+          click: () => emitMenuAction("close-tab"),
+        },
+        { type: "separator" },
+        {
+          label: "Focus Terminal",
+          accelerator: "CommandOrControl+1",
+          click: () => emitMenuAction("focus-terminal"),
+        },
+        {
+          label: "Focus Preview",
+          accelerator: "CommandOrControl+2",
+          click: () => emitMenuAction("focus-preview"),
+        },
+        { type: "separator" },
+        {
+          label: "Larger Font",
+          accelerator: "CommandOrControl+Plus",
+          click: () => emitMenuAction("font-larger"),
+        },
+        {
+          label: "Smaller Font",
+          accelerator: "CommandOrControl+-",
+          click: () => emitMenuAction("font-smaller"),
+        },
+        {
+          label: "Reset Font Size",
+          accelerator: "CommandOrControl+0",
+          click: () => emitMenuAction("font-reset"),
+        },
+      ],
+    },
+    {
+      label: "Capture",
+      submenu: [
+        {
+          label: "Aim",
+          accelerator: "CommandOrControl+Shift+A",
+          click: () => emitMenuAction("aim"),
+        },
+        {
+          label: "Frame",
+          accelerator: "CommandOrControl+Shift+F",
+          click: () => emitMenuAction("frame"),
+        },
+        {
+          label: "Re-send",
+          accelerator: "CommandOrControl+Shift+V",
+          click: () => emitMenuAction("resend"),
+        },
       ],
     },
     {
@@ -693,6 +801,27 @@ function installAppMenu() {
               sendToRenderer("preview:status", previewStatusSnapshot());
             }
           },
+        },
+        {
+          label: "Toggle Preview Pane",
+          accelerator: "CommandOrControl+Shift+P",
+          click: () => emitMenuAction("toggle-preview"),
+        },
+        { type: "separator" },
+        {
+          label: "Settings…",
+          accelerator: "CommandOrControl+,",
+          click: () => emitMenuAction("settings"),
+        },
+        {
+          label: "Command Palette",
+          accelerator: "CommandOrControl+K",
+          click: () => emitMenuAction("palette"),
+        },
+        {
+          label: "Keyboard Shortcuts",
+          accelerator: "CommandOrControl+/",
+          click: () => emitMenuAction("shortcuts"),
         },
         { type: "separator" },
         { role: "togglefullscreen" },
@@ -2607,6 +2736,27 @@ function createTerminalSlot(opts = {}) {
         terminalSlots.get(meta.id),
         { alive: false, shellAlive: false, reason: "exit" },
       );
+      // Warp-inspired: notify when Grok/session exits while window is in background
+      try {
+        if (
+          notifyOnGrokExit &&
+          Notification.isSupported() &&
+          mainWindow &&
+          !mainWindow.isDestroyed() &&
+          !mainWindow.isFocused()
+        ) {
+          const label = meta.label || meta.cwd || "Terminal";
+          new Notification({
+            title: tr("notify.grokExitTitle"),
+            body: tr("notify.grokExitBody", {
+              tab: label,
+              code: String(code ?? 0),
+            }),
+          }).show();
+        }
+      } catch {
+        /* ignore notification failures */
+      }
     },
   });
   const slot = { meta, pty };
@@ -2945,12 +3095,41 @@ function registerIpc() {
       grokReadiness: pty?.isGrokAlive() ? "unknown" : "not-running",
       grokState: pty?.isGrokAlive() ? "running" : "idle",
       layout: getLayoutBounds(),
+      ...termHostSettingsSnapshot(),
     };
   });
 
   ipcMain.handle("app:set-locale", async (_e, next) => {
     const locale = setUiLocale(next);
     return { locale };
+  });
+
+  ipcMain.handle("app:set-term-settings", async (_e, partial = {}) => {
+    const patch = {};
+    if (partial && typeof partial === "object") {
+      if (partial.termFontSize != null) patch.termFontSize = partial.termFontSize;
+      if (typeof partial.linkTooltip === "boolean") {
+        patch.linkTooltip = partial.linkTooltip;
+      }
+      if (typeof partial.copyOnSelect === "boolean") {
+        patch.copyOnSelect = partial.copyOnSelect;
+      }
+      if (partial.termScrollback != null) {
+        patch.termScrollback = partial.termScrollback;
+      }
+      if (typeof partial.notifyOnGrokExit === "boolean") {
+        patch.notifyOnGrokExit = partial.notifyOnGrokExit;
+      }
+    }
+    const next = persist(patch) || loadSettings(settingsFile());
+    termFontSize = next.termFontSize;
+    linkTooltip = next.linkTooltip;
+    copyOnSelect = next.copyOnSelect;
+    termScrollback = next.termScrollback;
+    notifyOnGrokExit = next.notifyOnGrokExit;
+    const snap = termHostSettingsSnapshot();
+    sendToRenderer("app:term-settings", snap);
+    return snap;
   });
 
   ipcMain.handle("app:copy-diagnostics", async () => {
@@ -3246,6 +3425,38 @@ function registerIpc() {
 
   ipcMain.handle("terminal:set-active", async (_e, sessionId) => {
     return setActiveTerminal(sessionId);
+  });
+
+  ipcMain.handle("terminal:rename", async (_e, opts = {}) => {
+    const sessionId = typeof opts.sessionId === "string" ? opts.sessionId : "";
+    const label = typeof opts.label === "string" ? opts.label.trim() : "";
+    const slot = getSlot(sessionId);
+    if (!slot || !label) {
+      return broadcastTerminalSessions();
+    }
+    slot.meta.label = label.slice(0, 48);
+    persistTerminalSessions(true);
+    return broadcastTerminalSessions();
+  });
+
+  ipcMain.handle("terminal:reorder", async (_e, orderedIds = []) => {
+    const ids = Array.isArray(orderedIds)
+      ? orderedIds.filter((id) => typeof id === "string" && terminalSlots.has(id))
+      : [];
+    if (ids.length === 0) return broadcastTerminalSessions();
+    // Rebuild map order: Map preserves insertion order.
+    const next = new Map();
+    for (const id of ids) {
+      const slot = terminalSlots.get(id);
+      if (slot) next.set(id, slot);
+    }
+    for (const [id, slot] of terminalSlots) {
+      if (!next.has(id)) next.set(id, slot);
+    }
+    terminalSlots.clear();
+    for (const [id, slot] of next) terminalSlots.set(id, slot);
+    persistTerminalSessions(true);
+    return broadcastTerminalSessions();
   });
 
   ipcMain.handle("terminal:start", async (_e, opts = {}) => {

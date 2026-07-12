@@ -90,6 +90,11 @@ function testRoundTrip() {
         "https://example.com/app",
       ],
       recentProjectCwds: ["/Users/me/app", "/tmp/other"],
+      termFontSize: DEFAULTS.termFontSize,
+      linkTooltip: DEFAULTS.linkTooltip,
+      copyOnSelect: DEFAULTS.copyOnSelect,
+      termScrollback: DEFAULTS.termScrollback,
+      notifyOnGrokExit: DEFAULTS.notifyOnGrokExit,
     });
   } finally {
     try {
@@ -232,6 +237,27 @@ function testDefaultPath() {
   assert.ok(p.startsWith("/tmp/userdata"));
 }
 
+function testTermHostSettingsNormalize() {
+  assert.strictEqual(DEFAULTS.termFontSize, 12);
+  assert.strictEqual(DEFAULTS.linkTooltip, true);
+  assert.strictEqual(DEFAULTS.copyOnSelect, false);
+  assert.strictEqual(DEFAULTS.termScrollback, 10000);
+  assert.strictEqual(DEFAULTS.notifyOnGrokExit, true);
+  const s = normalizeSettings({
+    termFontSize: 99,
+    linkTooltip: false,
+    copyOnSelect: true,
+    termScrollback: 50,
+    notifyOnGrokExit: false,
+  });
+  assert.strictEqual(s.termFontSize, 22);
+  assert.strictEqual(s.linkTooltip, false);
+  assert.strictEqual(s.copyOnSelect, true);
+  assert.strictEqual(s.termScrollback, 1000);
+  assert.strictEqual(s.notifyOnGrokExit, false);
+  assert.strictEqual(s.settingsVersion, SETTINGS_VERSION);
+}
+
 function run() {
   const tests = [
     testNormalizeClampsSplit,
@@ -245,6 +271,7 @@ function run() {
     testPreviewCollapsedPersists,
     testPrivateModeAndSensitiveUrlsPersistSafely,
     testPerSessionCaptureStateRoundTripsAndRestores,
+    testTermHostSettingsNormalize,
   ];
   let failed = 0;
   for (const t of tests) {

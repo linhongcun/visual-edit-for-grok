@@ -11,8 +11,15 @@ const {
   sanitizeHistoryUrl,
   sanitizeHistoryUrls,
 } = require("./privacy-policy.cjs");
+const {
+  clampTermFontSize,
+  clampTermScrollback,
+  asBoolean,
+  TERM_FONT_SIZE_DEFAULT,
+  TERM_SCROLLBACK_DEFAULT,
+} = require("../src/term-settings.cjs");
 
-const SETTINGS_VERSION = 2;
+const SETTINGS_VERSION = 3;
 const LEGACY_DEMO_URLS = new Set([
   "http://127.0.0.1:8765",
   "http://127.0.0.1:8765/",
@@ -38,6 +45,16 @@ const DEFAULTS = {
   activeTerminalId: "",
   recentPreviewUrls: [],
   recentProjectCwds: [],
+  /** Terminal host font size (px) */
+  termFontSize: TERM_FONT_SIZE_DEFAULT,
+  /** Show hover tooltip for terminal http(s) links */
+  linkTooltip: true,
+  /** Copy selection to clipboard on mouseup (default off — noisy for Grok TUI) */
+  copyOnSelect: false,
+  /** xterm scrollback rows */
+  termScrollback: TERM_SCROLLBACK_DEFAULT,
+  /** OS notification when Grok exits while app is in background */
+  notifyOnGrokExit: true,
 };
 
 /**
@@ -110,6 +127,26 @@ function normalizeSettings(raw) {
           .map((value) => value.trim()),
       ),
     ).slice(0, 8);
+  }
+  if (o.termFontSize != null) {
+    out.termFontSize = clampTermFontSize(o.termFontSize, TERM_FONT_SIZE_DEFAULT);
+  }
+  if (typeof o.linkTooltip === "boolean") {
+    out.linkTooltip = o.linkTooltip;
+  }
+  if (typeof o.copyOnSelect === "boolean") {
+    out.copyOnSelect = o.copyOnSelect;
+  }
+  if (o.termScrollback != null) {
+    out.termScrollback = clampTermScrollback(
+      o.termScrollback,
+      TERM_SCROLLBACK_DEFAULT,
+    );
+  }
+  if (typeof o.notifyOnGrokExit === "boolean") {
+    out.notifyOnGrokExit = o.notifyOnGrokExit;
+  } else if (o.notifyOnGrokExit != null) {
+    out.notifyOnGrokExit = asBoolean(o.notifyOnGrokExit, true);
   }
   return out;
 }

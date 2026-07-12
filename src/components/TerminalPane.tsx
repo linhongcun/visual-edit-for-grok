@@ -1,19 +1,23 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
+import { SearchAddon } from "@xterm/addon-search";
 import {
   trackpadScrollPixels,
   trackpadScrollPixelsFromFrame,
   trackpadTuiWheelImpulseFromFrame,
 } from "../trackpad-scroll.cjs";
 import { resolveTerminalLinkTarget } from "../link-open-policy.cjs";
+import {
+  clampTermFontSize,
+  clampTermScrollback,
+  TERM_FONT_SIZE_DEFAULT,
+  TERM_SCROLLBACK_DEFAULT,
+} from "../term-settings.cjs";
 import "@xterm/xterm/css/xterm.css";
-
-/** Slightly smaller than 13 so the same pane fits more columns (helps wide CJK tables). */
-const TERM_FONT_SIZE = 12;
 
 /**
  * Prefer mono fonts that measure CJK as double-width consistently.
@@ -32,6 +36,20 @@ const TERM_FONT_FAMILY = [
   "monospace",
 ].join(", ");
 
+export interface TerminalSearchOptions {
+  caseSensitive?: boolean;
+  incremental?: boolean;
+}
+
+export interface TerminalSearchApi {
+  findNext: (term: string, opts?: TerminalSearchOptions) => boolean;
+  findPrevious: (term: string, opts?: TerminalSearchOptions) => boolean;
+  clearDecorations: () => void;
+  onResults: (
+    handler: (info: { resultIndex: number; resultCount: number }) => void,
+  ) => () => void;
+}
+
 interface Props {
   /** Main-process terminal session id */
   sessionId: string;
@@ -40,6 +58,14 @@ interface Props {
   focusNonce?: number;
   /** Increment after splitter / layout settle to force fit + PTY resize */
   fitNonce?: number;
+  /** Terminal font size in px */
+  fontSize?: number;
+  /** xterm scrollback rows */
+  scrollback?: number;
+  /** Show hover tooltip for http(s) links */
+  linkTooltip?: boolean;
+  /** Copy selection to clipboard on mouseup */
+  copyOnSelect?: boolean;
   /**
    * Open http(s) links from the terminal in the in-app preview.
    * ⌘/Ctrl+click uses the system browser via openExternal instead.
@@ -47,6 +73,22 @@ interface Props {
   onOpenHttpUrl?: (url: string) => void;
   /** Optional toast/status when a link opens in the system browser */
   onOpenHttpUrlExternal?: (url: string) => void;
+  /** Register/unregister search API for this session (active find bar) */
+  onSearchApi?: (sessionId: string, api: TerminalSearchApi | null) => void;
+  /** Link tooltip copy */
+  linkTooltipLabels?: {
+    openPreview: string;
+    openSystem: string;
+  };
+  /** Context menu labels */
+  contextMenuLabels?: {
+    copy: string;
+    find: string;
+    openPreview: string;
+    openSystem: string;
+  };
+  /** Open find bar for this terminal (e.g. from context menu) */
+  onRequestFind?: () => void;
 }
 
 export default function TerminalPane({
@@ -54,12 +96,21 @@ export default function TerminalPane({
   active,
   focusNonce = 0,
   fitNonce = 0,
+  fontSize = TERM_FONT_SIZE_DEFAULT,
+  scrollback = TERM_SCROLLBACK_DEFAULT,
+  linkTooltip = true,
+  copyOnSelect = false,
   onOpenHttpUrl,
   onOpenHttpUrlExternal,
+  onSearchApi,
+  linkTooltipLabels,
+  contextMenuLabels,
+  onRequestFind,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const searchRef = useRef<SearchAddon | null>(null);
   const startedRef = useRef(false);
   const lastDimsRef = useRef({ cols: 0, rows: 0 });
   /** Single pending deferred focus timer — avoid multi-timeout storms */
@@ -68,12 +119,33 @@ export default function TerminalPane({
   const sessionIdRef = useRef(sessionId);
   const onOpenHttpUrlRef = useRef(onOpenHttpUrl);
   const onOpenHttpUrlExternalRef = useRef(onOpenHttpUrlExternal);
+  const onSearchApiRef = useRef(onSearchApi);
+  const linkTooltipEnabledRef = useRef(linkTooltip);
+  const copyOnSelectRef = useRef(copyOnSelect);
+  const linkTooltipLabelsRef = useRef(linkTooltipLabels);
   /** Pixel-mode deltaY summed within the current animation frame */
   const wheelFrameDeltaRef = useRef(0);
   const wheelFrameRafRef = useRef<number | null>(null);
   const wheelFrameEventRef = useRef<WheelEventInit | null>(null);
   /** Fractional TUI wheel reports carried into the next animation frame. */
   const tuiWheelRemainderRef = useRef(0);
+  const [tooltip, setTooltip] = useState<{
+    uri: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [ctxMenu, setCtxMenu] = useState<{
+    x: number;
+    y: number;
+    selection: string;
+    link: string | null;
+  } | null>(null);
+  const onRequestFindRef = useRef(onRequestFind);
+  const lastHoverUriRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    onRequestFindRef.current = onRequestFind;
+  }, [onRequestFind]);
 
   useEffect(() => {
     sessionIdRef.current = sessionId;
@@ -86,6 +158,23 @@ export default function TerminalPane({
   useEffect(() => {
     onOpenHttpUrlExternalRef.current = onOpenHttpUrlExternal;
   }, [onOpenHttpUrlExternal]);
+
+  useEffect(() => {
+    onSearchApiRef.current = onSearchApi;
+  }, [onSearchApi]);
+
+  useEffect(() => {
+    linkTooltipEnabledRef.current = linkTooltip;
+    if (!linkTooltip) setTooltip(null);
+  }, [linkTooltip]);
+
+  useEffect(() => {
+    copyOnSelectRef.current = copyOnSelect;
+  }, [copyOnSelect]);
+
+  useEffect(() => {
+    linkTooltipLabelsRef.current = linkTooltipLabels;
+  }, [linkTooltipLabels]);
 
   /**
    * Shared open path for WebLinksAddon (regex URLs) and OSC 8 linkHandler.
@@ -108,6 +197,27 @@ export default function TerminalPane({
           // Main validates schemes and owns the native browser handoff.
         });
     }
+  }
+
+  function showLinkTooltip(uri: string, event: MouseEvent) {
+    lastHoverUriRef.current = uri;
+    if (!linkTooltipEnabledRef.current) {
+      setTooltip(null);
+      return;
+    }
+    const host = hostRef.current;
+    if (!host) return;
+    const rect = host.getBoundingClientRect();
+    setTooltip({
+      uri,
+      x: Math.min(Math.max(8, event.clientX - rect.left + 12), rect.width - 16),
+      y: Math.min(Math.max(8, event.clientY - rect.top + 16), rect.height - 16),
+    });
+  }
+
+  function hideLinkTooltip() {
+    lastHoverUriRef.current = null;
+    setTooltip(null);
   }
 
   function clearFocusTimer() {
@@ -200,10 +310,13 @@ export default function TerminalPane({
   useEffect(() => {
     if (!hostRef.current || !window.vefg || !sessionId) return;
 
+    const initialFont = clampTermFontSize(fontSize);
+    const initialScrollback = clampTermScrollback(scrollback);
+
     const term = new Terminal({
       // Blink forces continuous repaints; keep off for scroll smoothness
       cursorBlink: false,
-      fontSize: TERM_FONT_SIZE,
+      fontSize: initialFont,
       fontFamily: TERM_FONT_FAMILY,
       // Integer-ish cell metrics help CJK + box-drawing table borders line up
       lineHeight: 1.2,
@@ -234,7 +347,7 @@ export default function TerminalPane({
         brightWhite: "#ffffff",
       },
       allowProposedApi: true,
-      scrollback: 5000,
+      scrollback: initialScrollback,
       convertEol: false,
       windowsMode: false,
       scrollSensitivity: 3,
@@ -247,6 +360,12 @@ export default function TerminalPane({
         activate: (event, uri) => {
           openTerminalHttpUrl(uri, event);
         },
+        hover: (event, uri) => {
+          showLinkTooltip(uri, event);
+        },
+        leave: () => {
+          hideLinkTooltip();
+        },
         // http(s) only — matches main shell:open-external allowlist
         allowNonHttpProtocols: false,
       },
@@ -258,11 +377,72 @@ export default function TerminalPane({
     const unicode11 = new Unicode11Addon();
     term.loadAddon(unicode11);
     term.unicode.activeVersion = "11";
+
+    const search = new SearchAddon({ highlightLimit: 1000 });
+    term.loadAddon(search);
+    searchRef.current = search;
+
+    const searchDecorations = {
+      matchBackground: "#3b4a6b",
+      matchBorder: "#6d8cff",
+      matchOverviewRuler: "#6d8cff",
+      activeMatchBackground: "#f5a524",
+      activeMatchBorder: "#ffffff",
+      activeMatchColorOverviewRuler: "#f5a524",
+    };
+
+    const api: TerminalSearchApi = {
+      findNext: (q, opts) =>
+        search.findNext(q, {
+          caseSensitive: Boolean(opts?.caseSensitive),
+          incremental: Boolean(opts?.incremental),
+          decorations: searchDecorations,
+        }),
+      findPrevious: (q, opts) =>
+        search.findPrevious(q, {
+          caseSensitive: Boolean(opts?.caseSensitive),
+          decorations: searchDecorations,
+        }),
+      clearDecorations: () => {
+        try {
+          search.clearDecorations();
+        } catch {
+          /* ignore */
+        }
+      },
+      onResults: (handler) => {
+        const d = search.onDidChangeResults((info) => {
+          handler({
+            resultIndex: info.resultIndex,
+            resultCount: info.resultCount,
+          });
+        });
+        return () => {
+          try {
+            d.dispose();
+          } catch {
+            /* ignore */
+          }
+        };
+      },
+    };
+    onSearchApiRef.current?.(sessionId, api);
+
     // Plain-text URL regex (non-OSC-8). OSC 8 uses Terminal.linkHandler above.
     term.loadAddon(
-      new WebLinksAddon((event, uri) => {
-        openTerminalHttpUrl(uri, event);
-      }),
+      new WebLinksAddon(
+        (event, uri) => {
+          openTerminalHttpUrl(uri, event);
+        },
+        {
+          hover: (event, text) => {
+            showLinkTooltip(text, event);
+          },
+          leave: () => {
+            hideLinkTooltip();
+          },
+        },
+      ),
     );
     term.open(hostRef.current);
     // WebGL: cleaner box-drawing for Grok tables; fall back to canvas if GPU path fails.
@@ -303,7 +483,7 @@ export default function TerminalPane({
     const terminalRowPx = (viewport: HTMLElement) =>
       Math.max(
         10,
-        (viewport.clientHeight || term.rows * TERM_FONT_SIZE) /
+        (viewport.clientHeight || term.rows * initialFont) /
           Math.max(1, term.rows),
       );
 
@@ -454,6 +634,35 @@ export default function TerminalPane({
       });
     }
 
+    const onSelectionChange = () => {
+      if (!copyOnSelectRef.current) return;
+      const text = term.getSelection();
+      if (!text) return;
+      try {
+        void navigator.clipboard.writeText(text);
+      } catch {
+        /* ignore */
+      }
+    };
+    const selectionDisp = term.onSelectionChange(onSelectionChange);
+
+    const onContextMenu = (ev: MouseEvent) => {
+      ev.preventDefault();
+      const host = hostRef.current;
+      if (!host) return;
+      const rect = host.getBoundingClientRect();
+      const selection = term.getSelection() || "";
+      // Prefer last hovered OSC/plain link URI when right-clicking a link.
+      const link = lastHoverUriRef.current || null;
+      setCtxMenu({
+        x: Math.min(ev.clientX - rect.left, rect.width - 160),
+        y: Math.min(ev.clientY - rect.top, rect.height - 120),
+        selection,
+        link,
+      });
+    };
+    terminalEl?.addEventListener("contextmenu", onContextMenu);
+
     const onData = window.vefg.on("terminal:data", (payload) => {
       if (typeof payload === "string") {
         // Legacy single-terminal payload
@@ -517,6 +726,8 @@ export default function TerminalPane({
     ro.observe(hostRef.current);
 
     return () => {
+      onSearchApiRef.current?.(sessionId, null);
+      searchRef.current = null;
       clearFocusTimer();
       clearResizeTimer();
       if (wheelFrameRafRef.current != null) {
@@ -528,6 +739,12 @@ export default function TerminalPane({
       tuiWheelRemainderRef.current = 0;
       if (terminalEl) {
         terminalEl.removeEventListener("wheel", onTerminalWheel, true);
+        terminalEl.removeEventListener("contextmenu", onContextMenu);
+      }
+      try {
+        selectionDisp.dispose();
+      } catch {
+        /* ignore */
       }
       onData();
       onExit();
@@ -537,7 +754,10 @@ export default function TerminalPane({
       termRef.current = null;
       fitRef.current = null;
       startedRef.current = false;
+      setTooltip(null);
     };
+    // sessionId is the identity of this pane instance; other options apply via effects.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
   useEffect(() => {
@@ -556,12 +776,115 @@ export default function TerminalPane({
     scheduleFit(true, 0);
   }, [fitNonce]);
 
+  // Live font size changes (zoom) — re-fit + PTY resize so Grok tables reflow.
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    const next = clampTermFontSize(fontSize);
+    if (term.options.fontSize === next) return;
+    term.options.fontSize = next;
+    scheduleFit(true, 0);
+  }, [fontSize]);
+
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    const next = clampTermScrollback(scrollback);
+    if (term.options.scrollback === next) return;
+    term.options.scrollback = next;
+  }, [scrollback]);
+
+  const tipLabels = linkTooltipLabels || {
+    openPreview: "Click → preview",
+    openSystem: "⌘-click → browser",
+  };
+  const menuLabels = contextMenuLabels || {
+    copy: "Copy",
+    find: "Find",
+    openPreview: "Open in preview",
+    openSystem: "Open in browser",
+  };
+
   return (
     <div
       className={`terminal-host ${active ? "is-active" : "is-hidden"}`}
       ref={hostRef}
       data-session-id={sessionId}
       aria-hidden={!active}
-    />
+      onClick={() => {
+        if (ctxMenu) setCtxMenu(null);
+      }}
+    >
+      {tooltip && active ? (
+        <div
+          className="term-link-tooltip"
+          style={{ left: tooltip.x, top: tooltip.y }}
+          role="tooltip"
+        >
+          <div className="term-link-tooltip-url">{tooltip.uri}</div>
+          <div className="term-link-tooltip-hint">
+            {tipLabels.openPreview} · {tipLabels.openSystem}
+          </div>
+        </div>
+      ) : null}
+      {ctxMenu && active ? (
+        <div
+          className="term-context-menu"
+          style={{ left: ctxMenu.x, top: ctxMenu.y }}
+          role="menu"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            disabled={!ctxMenu.selection}
+            onClick={() => {
+              if (ctxMenu.selection) {
+                void navigator.clipboard.writeText(ctxMenu.selection);
+              }
+              setCtxMenu(null);
+            }}
+          >
+            {menuLabels.copy}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setCtxMenu(null);
+              onRequestFindRef.current?.();
+            }}
+          >
+            {menuLabels.find}
+          </button>
+          {ctxMenu.link ? (
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  openTerminalHttpUrl(ctxMenu.link!, null);
+                  setCtxMenu(null);
+                }}
+              >
+                {menuLabels.openPreview}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  openTerminalHttpUrl(ctxMenu.link!, {
+                    metaKey: true,
+                  } as MouseEvent);
+                  setCtxMenu(null);
+                }}
+              >
+                {menuLabels.openSystem}
+              </button>
+            </>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
   );
 }
