@@ -71,3 +71,15 @@ Local production bar (not a Sentry/minidump clone):
 | Soft settings / PTY sinks | `persist()`, terminal `onExit` |
 | Packaging require guard | `test/stability.test.cjs` scans `electron/*.cjs` |
 | Smoke soft-fault probe | `window.vefg.stabilityProbe` |
+
+## Chrome inputs (v0.7.3)
+
+Warp-quality editing is mostly their **owned command editor**. We polish **app chrome** only:
+
+| Surface | Affordances |
+|---------|-------------|
+| Preview URL | Clear, Esc→terminal, ranked recent, a11y placeholder |
+| Find | Esc close, clear, focus ring |
+| Palette | Filter helper, empty state, Esc→terminal |
+
+Helpers: `src/input-chrome.cjs` (pure). Grok TUI prompt is unchanged.

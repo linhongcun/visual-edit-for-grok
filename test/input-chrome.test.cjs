@@ -1,0 +1,139 @@
+/**
+ * Unit tests for app-chrome input helpers (shipped src/input-chrome.cjs).
+ * Run: node test/input-chrome.test.cjs
+ */
+const assert = require("assert");
+const {
+  shouldShowUrlClear,
+  filterRecentUrls,
+  filterPaletteItems,
+  paletteItemMatches,
+  resolveEscapeAction,
+  normalizeUrlInputValue,
+} = require("../src/input-chrome.cjs");
+
+function testShouldShowUrlClear() {
+  assert.strictEqual(shouldShowUrlClear(""), false);
+  assert.strictEqual(shouldShowUrlClear("  "), true);
+  assert.strictEqual(shouldShowUrlClear("http://x"), true);
+  assert.strictEqual(shouldShowUrlClear(null), false);
+}
+
+function testFilterRecentEmptyQueryKeepsOrder() {
+  const recent = [
+    "http://localhost:3000/a",
+    "http://localhost:3000/b",
+    "https://example.com",
+  ];
+  assert.deepStrictEqual(filterRecentUrls("", recent), recent);
+  assert.deepStrictEqual(filterRecentUrls("  ", recent, { limit: 2 }), [
+    "http://localhost:3000/a",
+    "http://localhost:3000/b",
+  ]);
+}
+
+function testFilterRecentRanksStartsWith() {
+  const recent = [
+    "https://example.com/docs",
+    "http://localhost:5173/app",
+    "http://localhost:3000/",
+  ];
+  const hit = filterRecentUrls("localhost", recent);
+  assert.ok(hit.length >= 2);
+  assert.ok(hit.every((u) => u.toLowerCase().includes("localhost")));
+  assert.ok(hit[0].includes("localhost"));
+}
+
+function testFilterRecentPrivateModeEmpty() {
+  assert.deepStrictEqual(
+    filterRecentUrls("http", ["http://a", "http://b"], { privateMode: true }),
+    [],
+  );
+}
+
+function testFilterRecentDedupesAndDropsJunk() {
+  const recent = ["http://a", "http://a", "", null, "  http://b  ", "http://b"];
+  const hit = filterRecentUrls("", recent);
+  assert.deepStrictEqual(hit, ["http://a", "http://b"]);
+}
+
+function testPaletteMatchAndFilter() {
+  const items = [
+    { id: "find", label: "Find in terminal" },
+    { id: "aim", label: "Aim" },
+    { id: "settings", label: "Open settings" },
+  ];
+  assert.strictEqual(paletteItemMatches(items[0], "find"), true);
+  assert.strictEqual(paletteItemMatches(items[1], "zzz"), false);
+  assert.deepStrictEqual(
+    filterPaletteItems("set", items).map((i) => i.id),
+    ["settings"],
+  );
+  assert.strictEqual(filterPaletteItems("", items).length, 3);
+}
+
+function testEscapeOrderAimWins() {
+  assert.strictEqual(
+    resolveEscapeAction({
+      pickMode: true,
+      findOpen: true,
+      paletteOpen: true,
+      urlFocused: true,
+    }),
+    "aim-cancel",
+  );
+}
+
+function testEscapeOrderFindThenPaletteThenUrl() {
+  assert.strictEqual(
+    resolveEscapeAction({ findOpen: true, paletteOpen: true }),
+    "close-find",
+  );
+  assert.strictEqual(
+    resolveEscapeAction({ paletteOpen: true, settingsOpen: true }),
+    "close-palette",
+  );
+  assert.strictEqual(
+    resolveEscapeAction({ settingsOpen: true }),
+    "close-settings",
+  );
+  assert.strictEqual(
+    resolveEscapeAction({ shortcutsOpen: true }),
+    "close-shortcuts",
+  );
+  assert.strictEqual(resolveEscapeAction({ urlFocused: true }), "blur-url");
+  assert.strictEqual(resolveEscapeAction({}), "none");
+}
+
+function testNormalizeUrlInputValue() {
+  assert.strictEqual(normalizeUrlInputValue("  http://x  "), "http://x");
+  assert.strictEqual(normalizeUrlInputValue(null), "");
+}
+
+function run() {
+  const tests = [
+    testShouldShowUrlClear,
+    testFilterRecentEmptyQueryKeepsOrder,
+    testFilterRecentRanksStartsWith,
+    testFilterRecentPrivateModeEmpty,
+    testFilterRecentDedupesAndDropsJunk,
+    testPaletteMatchAndFilter,
+    testEscapeOrderAimWins,
+    testEscapeOrderFindThenPaletteThenUrl,
+    testNormalizeUrlInputValue,
+  ];
+  let failed = 0;
+  for (const t of tests) {
+    try {
+      t();
+      console.log(`ok  - ${t.name}`);
+    } catch (err) {
+      failed += 1;
+      console.error(`fail - ${t.name}`, err);
+    }
+  }
+  console.log(`\n${tests.length - failed}/${tests.length} passed`);
+  if (failed) process.exit(1);
+}
+
+run();

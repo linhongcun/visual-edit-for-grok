@@ -2,6 +2,15 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.7.3] — 2026-07-12
+
+### Warp-inspired chrome input polish
+
+- Preview URL field: clear control, Esc blurs back to terminal, filtered recent suggestions, EN/zh action placeholders
+- Shared Esc policy (Aim → find → palette → settings → URL blur) via pure `resolveEscapeAction`
+- Find bar + command palette: consistent focus ring, clear affordance, empty-state honesty
+- Pure helpers in `src/input-chrome.cjs` with unit tests; smoke covers URL clear + a11y
+
 ## [0.7.2] — 2026-07-12
 
 ### Production stability (Warp-inspired local bar)

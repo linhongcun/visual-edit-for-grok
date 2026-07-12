@@ -30,6 +30,13 @@ import {
   TERM_FONT_SIZE_DEFAULT,
   TERM_SCROLLBACK_DEFAULT,
 } from "./term-settings.cjs";
+import {
+  shouldShowUrlClear,
+  filterRecentUrls,
+  filterPaletteItems,
+  resolveEscapeAction,
+  normalizeUrlInputValue,
+} from "./input-chrome.cjs";
 import type {
   CaptureResult,
   ElementSelection,
@@ -259,6 +266,7 @@ export default function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState("");
+  const [urlFocused, setUrlFocused] = useState(false);
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [dragTabId, setDragTabId] = useState<string | null>(null);
@@ -266,6 +274,11 @@ export default function App() {
   const findQueryRef = useRef(findQuery);
   const findCaseRef = useRef(findCaseSensitive);
   const findOpenRef = useRef(findOpen);
+  const paletteOpenRef = useRef(paletteOpen);
+  const settingsOpenRef = useRef(settingsOpen);
+  const shortcutsOpenRef = useRef(shortcutsOpen);
+  const closeFindBarRef = useRef(() => {});
+  const focusGrokTerminalRef = useRef(() => {});
 
   function requestTerminalFit() {
     setTermFitNonce((n) => n + 1);
@@ -318,6 +331,18 @@ export default function App() {
     findOpenRef.current = findOpen;
   }, [findOpen]);
 
+  useEffect(() => {
+    paletteOpenRef.current = paletteOpen;
+  }, [paletteOpen]);
+
+  useEffect(() => {
+    settingsOpenRef.current = settingsOpen;
+  }, [settingsOpen]);
+
+  useEffect(() => {
+    shortcutsOpenRef.current = shortcutsOpen;
+  }, [shortcutsOpen]);
+
   function registerSearchApi(sessionId: string, api: TerminalSearchApi | null) {
     if (api) searchApisRef.current.set(sessionId, api);
     else searchApisRef.current.delete(sessionId);
@@ -357,6 +382,14 @@ export default function App() {
     setFindResultCount(0);
     focusGrokTerminal();
   }
+
+  useEffect(() => {
+    closeFindBarRef.current = closeFindBar;
+  });
+
+  useEffect(() => {
+    focusGrokTerminalRef.current = focusGrokTerminal;
+  });
 
   async function persistTermSettings(
     partial: Partial<{
@@ -996,12 +1029,41 @@ export default function App() {
       }),
     ];
 
-    // Global Esc in renderer (shell focused) also cancels Aim via IPC
+    // Global Esc: Aim first, then stacked chrome surfaces (find/palette/settings/URL)
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && pickModeRef.current) {
-        e.preventDefault();
-        void api.setPickMode(false);
-        return;
+      if (e.key === "Escape") {
+        const urlEl = document.getElementById(
+          "preview-url-input",
+        ) as HTMLInputElement | null;
+        const urlFocusedNow =
+          Boolean(urlEl) && document.activeElement === urlEl;
+        const action = resolveEscapeAction({
+          pickMode: pickModeRef.current,
+          findOpen: findOpenRef.current,
+          paletteOpen: paletteOpenRef.current,
+          settingsOpen: settingsOpenRef.current,
+          shortcutsOpen: shortcutsOpenRef.current,
+          urlFocused: urlFocusedNow,
+        });
+        if (action !== "none") {
+          e.preventDefault();
+          if (action === "aim-cancel") {
+            void api.setPickMode(false);
+          } else if (action === "close-find") {
+            closeFindBarRef.current();
+          } else if (action === "close-palette") {
+            setPaletteOpen(false);
+            focusGrokTerminalRef.current();
+          } else if (action === "close-settings") {
+            setSettingsOpen(false);
+          } else if (action === "close-shortcuts") {
+            setShortcutsOpen(false);
+          } else if (action === "blur-url") {
+            urlEl?.blur();
+            focusGrokTerminalRef.current();
+          }
+          return;
+        }
       }
       // ⌘⇧A Aim · ⌘⇧F Frame · ⌘⇧V Re-send — same busy single-flight as buttons
       if ((e.metaKey || e.ctrlKey) && e.shiftKey) {
@@ -1598,10 +1660,19 @@ export default function App() {
     (projectCwd ? projectCwd.split(/[/\\]/).pop() : "") ||
     tr("pane.terminal");
 
+  const filteredRecentUrls = filterRecentUrls(urlInput, recentPreviewUrls, {
+    privateMode,
+    limit: 8,
+  });
+
   const urlNavForm = (
     <form
-      className={`url-form ${preview.loading ? "loading" : ""}`}
-      onSubmit={onNavigate}
+      className={`url-form chrome-field ${preview.loading ? "loading" : ""} ${urlFocused ? "is-focused" : ""}`}
+      onSubmit={(e) => {
+        e.preventDefault();
+        setUrlInput(normalizeUrlInputValue(urlInput));
+        void onNavigate(e);
+      }}
       aria-busy={Boolean(preview.loading)}
     >
       <button
@@ -1639,15 +1710,47 @@ export default function App() {
         value={urlInput}
         list="recent-preview-urls"
         onChange={(e) => setUrlInput(e.target.value)}
-        placeholder="http://127.0.0.1:5173"
+        onFocus={() => setUrlFocused(true)}
+        onBlur={() => setUrlFocused(false)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            e.stopPropagation();
+            (e.target as HTMLInputElement).blur();
+            focusGrokTerminal();
+          }
+        }}
+        placeholder={tr("nav.urlPlaceholder")}
         spellCheck={false}
+        autoComplete="off"
+        autoCorrect="off"
+        autoCapitalize="off"
+        enterKeyHint="go"
         aria-label={tr("nav.urlAria")}
+        aria-autocomplete="list"
+        aria-controls="recent-preview-urls"
       />
       <datalist id="recent-preview-urls">
-        {(privateMode ? [] : recentPreviewUrls).map((url) => (
+        {filteredRecentUrls.map((url) => (
           <option value={url} key={url} />
         ))}
       </datalist>
+      {shouldShowUrlClear(urlInput) && !preview.loading ? (
+        <button
+          type="button"
+          className="icon-btn url-clear-btn"
+          title={tr("nav.urlClear")}
+          aria-label={tr("nav.urlClearAria")}
+          onClick={() => {
+            setUrlInput("");
+            requestAnimationFrame(() => {
+              document.getElementById("preview-url-input")?.focus();
+            });
+          }}
+        >
+          ×
+        </button>
+      ) : null}
       {preview.loading ? (
         <span
           className="url-loading-spinner"
@@ -2400,6 +2503,7 @@ export default function App() {
               caseSensitive: tr("find.case"),
               noResults: tr("find.noResults"),
               results: tr("find.results"),
+              clear: tr("find.clear"),
             }}
           />
           <div className="terminal-body terminal-body-full">
@@ -2627,7 +2731,10 @@ export default function App() {
         <div
           className="modal-backdrop"
           role="presentation"
-          onClick={() => setPaletteOpen(false)}
+          onClick={() => {
+            setPaletteOpen(false);
+            focusGrokTerminal();
+          }}
         >
           <div
             className="modal-sheet palette-sheet"
@@ -2637,101 +2744,136 @@ export default function App() {
             onKeyDown={(e) => {
               if (e.key === "Escape") {
                 e.preventDefault();
+                e.stopPropagation();
                 setPaletteOpen(false);
+                focusGrokTerminal();
               }
             }}
           >
-            <input
-              className="palette-input"
-              autoFocus
-              value={paletteQuery}
-              placeholder={tr("palette.placeholder")}
-              onChange={(e) => setPaletteQuery(e.target.value)}
-              spellCheck={false}
-            />
-            <ul className="palette-list">
-              {[
-                {
-                  id: "find",
-                  label: tr("palette.find"),
-                  run: () => {
+            <div className="palette-input-row chrome-field is-focused">
+              <input
+                className="palette-input"
+                autoFocus
+                value={paletteQuery}
+                placeholder={tr("palette.placeholder")}
+                onChange={(e) => setPaletteQuery(e.target.value)}
+                spellCheck={false}
+                autoComplete="off"
+                aria-label={tr("palette.placeholder")}
+                enterKeyHint="go"
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    e.stopPropagation();
                     setPaletteOpen(false);
-                    openFindBar();
+                    focusGrokTerminal();
+                  }
+                }}
+              />
+              {shouldShowUrlClear(paletteQuery) ? (
+                <button
+                  type="button"
+                  className="icon-btn url-clear-btn"
+                  title={tr("nav.urlClear")}
+                  aria-label={tr("palette.clearAria")}
+                  onClick={() => setPaletteQuery("")}
+                >
+                  ×
+                </button>
+              ) : null}
+            </div>
+            <ul className="palette-list" role="listbox" aria-label={tr("palette.title")}>
+              {(() => {
+                const commands = [
+                  {
+                    id: "find",
+                    label: tr("palette.find"),
+                    run: () => {
+                      setPaletteOpen(false);
+                      openFindBar();
+                    },
                   },
-                },
-                {
-                  id: "aim",
-                  label: tr("palette.aim"),
-                  run: () => {
-                    setPaletteOpen(false);
-                    void togglePickRef.current();
+                  {
+                    id: "aim",
+                    label: tr("palette.aim"),
+                    run: () => {
+                      setPaletteOpen(false);
+                      void togglePickRef.current();
+                    },
                   },
-                },
-                {
-                  id: "frame",
-                  label: tr("palette.frame"),
-                  run: () => {
-                    setPaletteOpen(false);
-                    void onScreenshotRef.current();
+                  {
+                    id: "frame",
+                    label: tr("palette.frame"),
+                    run: () => {
+                      setPaletteOpen(false);
+                      void onScreenshotRef.current();
+                    },
                   },
-                },
-                {
-                  id: "resend",
-                  label: tr("palette.resend"),
-                  run: () => {
-                    setPaletteOpen(false);
-                    void onResendRef.current();
+                  {
+                    id: "resend",
+                    label: tr("palette.resend"),
+                    run: () => {
+                      setPaletteOpen(false);
+                      void onResendRef.current();
+                    },
                   },
-                },
-                {
-                  id: "new-tab",
-                  label: tr("palette.newTab"),
-                  run: () => {
-                    setPaletteOpen(false);
-                    void onNewTerminal();
+                  {
+                    id: "new-tab",
+                    label: tr("palette.newTab"),
+                    run: () => {
+                      setPaletteOpen(false);
+                      void onNewTerminal();
+                    },
                   },
-                },
-                {
-                  id: "settings",
-                  label: tr("palette.settings"),
-                  run: () => {
-                    setPaletteOpen(false);
-                    setSettingsOpen(true);
+                  {
+                    id: "settings",
+                    label: tr("palette.settings"),
+                    run: () => {
+                      setPaletteOpen(false);
+                      setSettingsOpen(true);
+                    },
                   },
-                },
-                {
-                  id: "shortcuts",
-                  label: tr("palette.shortcuts"),
-                  run: () => {
-                    setPaletteOpen(false);
-                    setShortcutsOpen(true);
+                  {
+                    id: "shortcuts",
+                    label: tr("palette.shortcuts"),
+                    run: () => {
+                      setPaletteOpen(false);
+                      setShortcutsOpen(true);
+                    },
                   },
-                },
-                {
-                  id: "toggle-preview",
-                  label: tr("palette.togglePreview"),
-                  run: () => {
-                    setPaletteOpen(false);
-                    void applyPreviewCollapsed(!previewCollapsedRef.current);
+                  {
+                    id: "toggle-preview",
+                    label: tr("palette.togglePreview"),
+                    run: () => {
+                      setPaletteOpen(false);
+                      void applyPreviewCollapsed(!previewCollapsedRef.current);
+                    },
                   },
-                },
-              ]
-                .filter((item) => {
-                  const q = paletteQuery.trim().toLowerCase();
-                  if (!q) return true;
-                  return item.label.toLowerCase().includes(q);
-                })
-                .map((item) => (
-                  <li key={item.id}>
-                    <button
-                      type="button"
-                      className="palette-item"
-                      onClick={() => item.run()}
-                    >
-                      {item.label}
-                    </button>
-                  </li>
-                ))}
+                ];
+                const visible = filterPaletteItems(paletteQuery, commands);
+                if (visible.length === 0) {
+                  return (
+                    <li className="palette-empty" role="option" aria-disabled>
+                      {tr("palette.noResults")}
+                    </li>
+                  );
+                }
+                return visible.map((item) => {
+                  const full = commands.find((c) => c.id === item.id);
+                  if (!full) return null;
+                  return (
+                    <li key={item.id} role="option">
+                      <button
+                        type="button"
+                        className="palette-item"
+                        onClick={() => full.run()}
+                      >
+                        {item.label}
+                      </button>
+                    </li>
+                  );
+                });
+              })()}
             </ul>
           </div>
         </div>

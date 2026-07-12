@@ -428,6 +428,54 @@ async function run() {
     assert.notStrictEqual(movedSplitter.valueNow, initialSplitter.valueNow);
     assert.notStrictEqual(movedSplitter.valueText, initialSplitter.valueText);
 
+    // Warp-inspired chrome inputs: URL field a11y + placeholder + one-click clear
+    const urlChrome = await shellClient.evaluate(`(() => {
+      const input = document.querySelector('#preview-url-input, .url-input');
+      if (!input) return null;
+      return {
+        placeholder: String(input.getAttribute('placeholder') || input.placeholder || ''),
+        ariaLabel: String(input.getAttribute('aria-label') || ''),
+        hasForm: Boolean(input.closest('.url-form, form.url-form, .chrome-field')),
+      };
+    })()`);
+    assert.ok(urlChrome, "preview URL input missing");
+    assert.ok(
+      urlChrome.placeholder.length > 0 || urlChrome.ariaLabel.length > 0,
+      "URL input needs placeholder or aria-label",
+    );
+    assert.ok(urlChrome.hasForm, "URL input not wrapped in chrome form");
+    await shellClient.evaluate(`(() => {
+      const input = document.querySelector('#preview-url-input, .url-input');
+      if (!input) return;
+      const proto = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        'value',
+      );
+      proto.set.call(input, 'http://127.0.0.1:9/smoke');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    })()`);
+    const clearVisible = await waitFor(
+      () =>
+        shellClient.evaluate(
+          `Boolean(document.querySelector('.url-clear-btn'))`,
+        ),
+      "URL clear button did not appear after typing",
+      4_000,
+    );
+    assert.ok(clearVisible, "URL clear button missing");
+    await shellClient.evaluate(
+      `document.querySelector('.url-clear-btn')?.click()`,
+    );
+    const cleared = await shellClient.evaluate(
+      `document.querySelector('#preview-url-input, .url-input')?.value || ''`,
+    );
+    assert.strictEqual(cleared, "", "URL clear did not empty the field");
+    await shellClient.evaluate(
+      `document.querySelector('#preview-url-input')?.blur()`,
+    );
+    console.log("ok  - URL chrome clear + placeholder");
+
     const welcomeClient = await connectTarget(
       debuggingPort,
       (target) => {

@@ -19,11 +19,12 @@ export interface TerminalFindBarProps {
     caseSensitive: string;
     noResults: string;
     results: string;
+    clear?: string;
   };
 }
 
 /**
- * Compact find bar for the active terminal tab (Warp-inspired, xterm SearchAddon).
+ * Compact find bar for the active terminal tab (Warp-inspired chrome input).
  */
 export default function TerminalFindBar({
   open,
@@ -79,16 +80,36 @@ export default function TerminalFindBar({
         }
       }}
     >
-      <input
-        ref={inputRef}
-        className="term-find-input"
-        type="search"
-        value={query}
-        placeholder={labels.placeholder}
-        spellCheck={false}
-        autoComplete="off"
-        onChange={(e) => onQueryChange(e.target.value)}
-      />
+      <div className="term-find-field chrome-field is-focused">
+        <input
+          ref={inputRef}
+          className="term-find-input"
+          type="search"
+          value={query}
+          placeholder={labels.placeholder}
+          spellCheck={false}
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="off"
+          enterKeyHint="search"
+          aria-label={labels.placeholder}
+          onChange={(e) => onQueryChange(e.target.value)}
+        />
+        {query ? (
+          <button
+            type="button"
+            className="icon-btn url-clear-btn"
+            title={labels.clear || labels.close}
+            aria-label={labels.clear || labels.close}
+            onClick={() => {
+              onQueryChange("");
+              inputRef.current?.focus();
+            }}
+          >
+            ×
+          </button>
+        ) : null}
+      </div>
       <label className="term-find-case" title={labels.caseSensitive}>
         <input
           type="checkbox"
