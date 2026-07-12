@@ -2,6 +2,13 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.8.9] — 2026-07-12
+
+### Fix network_requests priority for mainFrame
+
+- PRIORITY_RESOURCE_TYPES keys are lowercase to match normalized Electron resourceType (`mainFrame` → `mainframe`)
+- Unit test: main document stays in list(12) ahead of image flood
+
 ## [0.8.8] — 2026-07-12
 
 ### playwright-mcp-inspired network request summary for Grok

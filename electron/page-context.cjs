@@ -319,10 +319,14 @@ const MAX_NETWORK_RING = 40;
 const MAX_NETWORK_IN_PAYLOAD = 12;
 const MAX_NETWORK_BLOCK_CHARS = 1600;
 
-/** Resource types we prefer when packing LLM context (playwright-mcp non-static spirit). */
+/**
+ * Resource types we prefer when packing LLM context (playwright-mcp non-static spirit).
+ * Keys are lowercase — normalizeNetworkEntry lowercases Electron resourceType
+ * (e.g. mainFrame → mainframe).
+ */
 const PRIORITY_RESOURCE_TYPES = new Set([
-  "mainFrame",
-  "subFrame",
+  "mainframe",
+  "subframe",
   "xhr",
   "fetch",
   "script",

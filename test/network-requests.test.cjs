@@ -92,6 +92,69 @@ function testRingPrefersFailedAndCaps() {
   assert.ok(body.length < 1600);
 }
 
+/**
+ * Electron reports resourceType as mainFrame; normalize lowercases to mainframe.
+ * Priority set must match lowercase or list() drops the document behind images.
+ */
+function testMainFramePriorityOverImages() {
+  const ring = new NetworkRequestRing({ maxSize: 40 });
+  // Flood with images first (non-priority after normalize)
+  for (let i = 0; i < 15; i++) {
+    ring.push({
+      url: `https://cdn.example.com/a${i}.png`,
+      method: "GET",
+      status: 200,
+      resourceType: "image",
+    });
+  }
+  // Many xhr (priority)
+  for (let i = 0; i < 10; i++) {
+    ring.push({
+      url: `https://api.example.com/x${i}`,
+      method: "GET",
+      status: 200,
+      resourceType: "xhr",
+    });
+  }
+  // Electron camelCase mainFrame — normalize → mainframe
+  ring.push({
+    url: "https://example.com/document-page",
+    method: "GET",
+    status: 200,
+    resourceType: "mainFrame",
+  });
+
+  const normalized = normalizeNetworkEntry({
+    url: "https://example.com/document-page",
+    method: "GET",
+    status: 200,
+    resourceType: "mainFrame",
+  });
+  assert.strictEqual(
+    normalized.resourceType,
+    "mainframe",
+    "Electron mainFrame must normalize to lowercase mainframe",
+  );
+
+  const list = ring.list(12);
+  assert.ok(list.length <= 12);
+  const urls = list.map((e) => e.url);
+  assert.ok(
+    urls.some((u) => u.includes("document-page")),
+    "main document must remain in list(12) ahead of pure image flood",
+  );
+  // mainFrame should appear before any image in the packed list
+  const mainIdx = list.findIndex((e) => e.url.includes("document-page"));
+  const firstImageIdx = list.findIndex((e) => e.resourceType === "image");
+  assert.ok(mainIdx >= 0, "mainFrame present");
+  if (firstImageIdx >= 0) {
+    assert.ok(
+      mainIdx < firstImageIdx,
+      `mainFrame (idx ${mainIdx}) must rank before images (idx ${firstImageIdx})`,
+    );
+  }
+}
+
 function testPayloadFenceWhenNonEmpty() {
   const text = buildClipboardPayload({
     selection: {
@@ -152,6 +215,7 @@ function run() {
     testFailedEntry,
     testEmptyListNoBody,
     testRingPrefersFailedAndCaps,
+    testMainFramePriorityOverImages,
     testPayloadFenceWhenNonEmpty,
     testPayloadOmitsEmptyNetworkFence,
     testMainWiresWebRequest,
