@@ -95,3 +95,19 @@ Warp maps **Shift+Enter → newline** in its multiline command editor. Our agent
 | Palette | run selection | ignore |
 
 Arrows on palette move the highlight. Policy: `resolveUrlKeyAction` / `resolveFindKeyAction` / `resolvePaletteKeyAction`.
+
+## Grok host remaps (v0.7.7–0.8.0)
+
+xterm.js gaps + Warp-inspired macOS edit chords, pure encoder `src/terminal-key-encode.cjs`:
+
+| Chord | Sequence | Purpose |
+|-------|----------|---------|
+| ⇧Enter | ESC+CR | Newline (stock xterm = bare CR) |
+| ⌃Enter | Kitty CSI-u | Interject |
+| ⌘A | Kitty Super+A | Select all (needs `TERM_PROGRAM=ghostty`) |
+| ⌘⌫ / ⌘⌦ | Super+A + DEL | Clear whole composer |
+| ⌘← / ⌘→ | Ctrl+A / Ctrl+E | Line start / end |
+| ⌘↑ / ⌘↓ | Ctrl+Home / Ctrl+End | Buffer start / end |
+| ⌥⌦ | ESC d | Forward word delete |
+
+Full capability map: `docs/WARP-INPUT-INVENTORY.md`.

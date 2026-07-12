@@ -2,6 +2,21 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.8.0] — 2026-07-12
+
+### Warp-inspired Grok host input chords (full inventory pass)
+
+Surveyed Warp editor defaults (`cmd-left/right/up/down`, `alt-delete`, …) and closed remaining xterm.js host gaps:
+
+- **⌘← / ⌘→** → Ctrl+A / Ctrl+E (line start / end; stock xterm no-ops meta+arrow)
+- **⌘↑ / ⌘↓** → Ctrl+Home / Ctrl+End (buffer start / end)
+- **⌥⌦** → ESC d (forward word delete; more reliable than CSI alt-delete)
+- Keep existing: ⇧Enter newline, ⌃Enter interject, ⌘A select-all, ⌘⌫/⌘⌦ clear line
+- Inventory: `docs/WARP-INPUT-INVENTORY.md`; shortcuts sheet + EN/zh strings
+- Unit tests expanded for write + keypress swallow on new chords
+
+Out of scope (still): Warp multiline editor, slash/completions UI, select-extend chords.
+
 ## [0.7.9] — 2026-07-12
 
 ### Cmd+Backspace / Cmd+Delete clears Grok prompt line

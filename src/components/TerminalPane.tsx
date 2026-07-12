@@ -699,11 +699,14 @@ export default function TerminalPane({
     });
 
     /**
-     * Grok host key remaps (xterm.js gaps):
+     * Grok host key remaps (xterm.js gaps + Warp-inspired macOS edit chords):
      * - Shift+Enter → ESC+CR newline (stock xterm sends bare CR)
      * - Ctrl+Enter → Kitty CSI-u interject
      * - Cmd+A → Kitty Super+A select-all (with TERM_PROGRAM=ghostty)
      * - Cmd+Backspace/Delete → select-all + DEL (clear whole prompt line)
+     * - Cmd+←/→ → Ctrl+A/E line start/end (xterm no-ops meta+arrow)
+     * - Cmd+↑/↓ → Ctrl+Home/End buffer start/end
+     * - Alt+Delete → ESC d forward word delete
      * Always swallow keypress/keyup after keydown write to avoid double chars.
      */
     term.attachCustomKeyEventHandler((ev) => {

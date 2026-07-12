@@ -9,9 +9,17 @@
  * Cmd+A        → Kitty Super+A (select all; Grok enables this when
  *                TERM_PROGRAM looks like Ghostty)
  * Cmd+Backspace / Cmd+Delete → Super+A then DEL (clear whole prompt buffer)
+ * Cmd+← / Cmd+→ → Ctrl+A / Ctrl+E (line start / end; xterm no-ops meta+arrow)
+ * Cmd+↑ / Cmd+↓ → Ctrl+Home / Ctrl+End (buffer start / end)
+ * Alt+Delete   → ESC d (forward word delete; stock CSI is unreliable in Grok)
  *
  * Always swallow keypress/keyup after a keydown write so xterm cannot emit a
  * second bare character (see v0.7.8 Shift+Enter fix).
+ *
+ * Warp editor bindings surveyed for product mapping (AGPL ideas only):
+ * cmd-left/right → visual line home/end; cmd-up/down → buffer top/bottom;
+ * alt-delete → delete word right. We reimplement via PTY sequences, not
+ * Warp's first-party multiline editor.
  */
 
 /**
@@ -25,6 +33,17 @@ const KITTY_MOD_SUPER = 9;
 const KITTY_KEY_A = 97;
 /** Backspace in Kitty CSI-u */
 const KITTY_KEY_BACKSPACE = 127;
+
+/** readline / most TUI composers: beginning of line */
+const SEQ_LINE_START = "\x01";
+/** readline / most TUI composers: end of line */
+const SEQ_LINE_END = "\x05";
+/** xterm Ctrl+Home — start of buffer in many multiline editors */
+const SEQ_BUFFER_START = "\x1b[1;5H";
+/** xterm Ctrl+End — end of buffer in many multiline editors */
+const SEQ_BUFFER_END = "\x1b[1;5F";
+/** readline kill-word-forward (alt-d) */
+const SEQ_WORD_DELETE_FORWARD = "\x1bd";
 
 function isEnterKey(event) {
   return (
@@ -44,6 +63,36 @@ function isForwardDeleteKey(event) {
 
 function isLetterA(event) {
   return event.key === "a" || event.key === "A" || event.keyCode === 65;
+}
+
+function isArrowLeft(event) {
+  return event.key === "ArrowLeft" || event.keyCode === 37;
+}
+
+function isArrowRight(event) {
+  return event.key === "ArrowRight" || event.keyCode === 39;
+}
+
+function isArrowUp(event) {
+  return event.key === "ArrowUp" || event.keyCode === 38;
+}
+
+function isArrowDown(event) {
+  return event.key === "ArrowDown" || event.keyCode === 40;
+}
+
+/**
+ * @param {string} type
+ * @param {string} sequence
+ * @param {string} writeReason
+ * @param {string} swallowReason
+ * @returns {HostKeyResult}
+ */
+function writeOrSwallow(type, sequence, writeReason, swallowReason) {
+  if (type === "keydown") {
+    return { action: "write", sequence, reason: writeReason };
+  }
+  return { action: "swallow", reason: swallowReason };
 }
 
 /**
@@ -71,59 +120,101 @@ function resolveGrokHostKey(event) {
   if (isEnterKey(event) && !meta) {
     // Shift+Enter alone → newline (ESC+CR)
     if (shift && !alt && !ctrl) {
-      if (type === "keydown") {
-        return {
-          action: "write",
-          sequence: "\x1b\r",
-          reason: "shift-enter-newline",
-        };
-      }
-      return { action: "swallow", reason: "shift-enter-swallow" };
+      return writeOrSwallow(
+        type,
+        "\x1b\r",
+        "shift-enter-newline",
+        "shift-enter-swallow",
+      );
     }
     // Ctrl+Enter alone → interject
     if (ctrl && !shift && !alt) {
-      if (type === "keydown") {
-        return {
-          action: "write",
-          sequence: "\x1b[13;5u",
-          reason: "ctrl-enter-interject",
-        };
-      }
-      return { action: "swallow", reason: "ctrl-enter-swallow" };
+      return writeOrSwallow(
+        type,
+        "\x1b[13;5u",
+        "ctrl-enter-interject",
+        "ctrl-enter-swallow",
+      );
     }
     // Alt+Enter / plain Enter — leave to xterm
     return null;
   }
 
+  // --- Alt-only edit chords (no Meta/Ctrl) ---
+  // Warp: alt-delete → delete word right. xterm emits CSI 3;3~ which many
+  // TUI editors ignore; ESC d is the classic readline forward-kill-word.
+  if (alt && !meta && !ctrl && isForwardDeleteKey(event) && !shift) {
+    return writeOrSwallow(
+      type,
+      SEQ_WORD_DELETE_FORWARD,
+      "alt-delete-word-forward",
+      "alt-delete-swallow",
+    );
+  }
+
   // --- macOS Meta (Cmd) edit chords ---
   // Only pure Cmd (no ctrl/alt) so we don't fight real app shortcuts.
+  // Shift is allowed only where we intentionally ignore (no select-extend yet).
   if (!meta || ctrl || alt) return null;
 
   // Cmd+A → select all (Kitty Super+A). Needs Grok Ghostty-class detection;
   // our PTY env sets TERM_PROGRAM=ghostty for this.
   if (isLetterA(event) && !shift) {
-    if (type === "keydown") {
-      return {
-        action: "write",
-        sequence: `\x1b[${KITTY_KEY_A};${KITTY_MOD_SUPER}u`,
-        reason: "cmd-a-select-all",
-      };
-    }
-    return { action: "swallow", reason: "cmd-a-swallow" };
+    return writeOrSwallow(
+      type,
+      `\x1b[${KITTY_KEY_A};${KITTY_MOD_SUPER}u`,
+      "cmd-a-select-all",
+      "cmd-a-swallow",
+    );
   }
 
-  // Cmd+Backspace / Cmd+Delete → select all + delete (clear entire prompt line/buffer)
-  // macOS users expect this to wipe the current field/line; Grok has no separate
-  // "kill line" chord documented, so select-all + DEL matches whole-line clear.
+  // Cmd+Backspace / Cmd+Delete → select all + delete (clear entire prompt)
+  // Warp splits these (delete-all-left vs delete-all-right); product choice here
+  // is whole-composer clear (confirmed 0.7.9).
   if ((isBackspaceKey(event) || isForwardDeleteKey(event)) && !shift) {
-    if (type === "keydown") {
-      return {
-        action: "write",
-        sequence: `\x1b[${KITTY_KEY_A};${KITTY_MOD_SUPER}u\x7f`,
-        reason: "cmd-backspace-clear-line",
-      };
-    }
-    return { action: "swallow", reason: "cmd-backspace-swallow" };
+    return writeOrSwallow(
+      type,
+      `\x1b[${KITTY_KEY_A};${KITTY_MOD_SUPER}u\x7f`,
+      "cmd-backspace-clear-line",
+      "cmd-backspace-swallow",
+    );
+  }
+
+  // Cmd+← / → — xterm no-ops meta+arrow (Keyboard.ts break). Map to Ctrl+A/E
+  // like Warp's macOS ctrl-a / ctrl-e line motions and Terminal.app defaults.
+  if (isArrowLeft(event) && !shift) {
+    return writeOrSwallow(
+      type,
+      SEQ_LINE_START,
+      "cmd-left-line-start",
+      "cmd-left-swallow",
+    );
+  }
+  if (isArrowRight(event) && !shift) {
+    return writeOrSwallow(
+      type,
+      SEQ_LINE_END,
+      "cmd-right-line-end",
+      "cmd-right-swallow",
+    );
+  }
+
+  // Cmd+↑ / ↓ — buffer start / end (Warp cmd-up/down / VS Code document nav).
+  if (isArrowUp(event) && !shift) {
+    return writeOrSwallow(
+      type,
+      SEQ_BUFFER_START,
+      "cmd-up-buffer-start",
+      "cmd-up-swallow",
+    );
+  }
+  if (isArrowDown(event) && !shift) {
+    return writeOrSwallow(
+      type,
+      SEQ_BUFFER_END,
+      "cmd-down-buffer-end",
+      "cmd-down-swallow",
+    );
   }
 
   return null;
@@ -166,4 +257,9 @@ module.exports = {
   KITTY_MOD_SUPER,
   KITTY_KEY_A,
   KITTY_KEY_BACKSPACE,
+  SEQ_LINE_START,
+  SEQ_LINE_END,
+  SEQ_BUFFER_START,
+  SEQ_BUFFER_END,
+  SEQ_WORD_DELETE_FORWARD,
 };

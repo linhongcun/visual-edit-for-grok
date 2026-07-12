@@ -8,6 +8,11 @@ const {
   encodeModifiedEnterForGrok,
   KITTY_MOD_SUPER,
   KITTY_KEY_A,
+  SEQ_LINE_START,
+  SEQ_LINE_END,
+  SEQ_BUFFER_START,
+  SEQ_BUFFER_END,
+  SEQ_WORD_DELETE_FORWARD,
 } = require("../src/terminal-key-encode.cjs");
 
 function testPlainEnterPassthrough() {
@@ -117,6 +122,135 @@ function testEncodeCompat() {
   );
 }
 
+function testCmdLeftLineStart() {
+  const r = resolveGrokHostKey({
+    type: "keydown",
+    key: "ArrowLeft",
+    metaKey: true,
+  });
+  assert.ok(r);
+  assert.strictEqual(r.action, "write");
+  assert.strictEqual(r.sequence, SEQ_LINE_START);
+  assert.strictEqual(r.reason, "cmd-left-line-start");
+}
+
+function testCmdRightLineEnd() {
+  const r = resolveGrokHostKey({
+    type: "keydown",
+    key: "ArrowRight",
+    metaKey: true,
+  });
+  assert.ok(r);
+  assert.strictEqual(r.action, "write");
+  assert.strictEqual(r.sequence, SEQ_LINE_END);
+  assert.strictEqual(r.reason, "cmd-right-line-end");
+}
+
+function testCmdLeftKeypressSwallows() {
+  const r = resolveGrokHostKey({
+    type: "keypress",
+    key: "ArrowLeft",
+    metaKey: true,
+  });
+  assert.ok(r);
+  assert.strictEqual(r.action, "swallow");
+  assert.strictEqual(r.reason, "cmd-left-swallow");
+}
+
+function testCmdUpBufferStart() {
+  const r = resolveGrokHostKey({
+    type: "keydown",
+    key: "ArrowUp",
+    metaKey: true,
+  });
+  assert.ok(r);
+  assert.strictEqual(r.action, "write");
+  assert.strictEqual(r.sequence, SEQ_BUFFER_START);
+  assert.strictEqual(r.reason, "cmd-up-buffer-start");
+}
+
+function testCmdDownBufferEnd() {
+  const r = resolveGrokHostKey({
+    type: "keydown",
+    key: "ArrowDown",
+    metaKey: true,
+  });
+  assert.ok(r);
+  assert.strictEqual(r.action, "write");
+  assert.strictEqual(r.sequence, SEQ_BUFFER_END);
+  assert.strictEqual(r.reason, "cmd-down-buffer-end");
+}
+
+function testCmdArrowWithCtrlIgnored() {
+  assert.strictEqual(
+    resolveGrokHostKey({
+      type: "keydown",
+      key: "ArrowLeft",
+      metaKey: true,
+      ctrlKey: true,
+    }),
+    null,
+  );
+}
+
+function testPlainArrowPassthrough() {
+  assert.strictEqual(
+    resolveGrokHostKey({ type: "keydown", key: "ArrowLeft" }),
+    null,
+  );
+  assert.strictEqual(
+    resolveGrokHostKey({ type: "keydown", key: "ArrowUp" }),
+    null,
+  );
+}
+
+function testAltLeftPassthrough() {
+  // Word motion left is stock xterm (ESC b); do not steal.
+  assert.strictEqual(
+    resolveGrokHostKey({
+      type: "keydown",
+      key: "ArrowLeft",
+      altKey: true,
+    }),
+    null,
+  );
+}
+
+function testAltDeleteWordForward() {
+  const r = resolveGrokHostKey({
+    type: "keydown",
+    key: "Delete",
+    altKey: true,
+  });
+  assert.ok(r);
+  assert.strictEqual(r.action, "write");
+  assert.strictEqual(r.sequence, SEQ_WORD_DELETE_FORWARD);
+  assert.strictEqual(r.reason, "alt-delete-word-forward");
+}
+
+function testAltDeleteKeypressSwallows() {
+  const r = resolveGrokHostKey({
+    type: "keypress",
+    key: "Delete",
+    altKey: true,
+  });
+  assert.ok(r);
+  assert.strictEqual(r.action, "swallow");
+}
+
+function testCmdShiftArrowNotRemappedYet() {
+  // Selection-extend chords reserved; do not emit partial line motion.
+  assert.strictEqual(
+    resolveGrokHostKey({
+      type: "keydown",
+      key: "ArrowLeft",
+      metaKey: true,
+      shiftKey: true,
+    }),
+    null,
+  );
+}
+
 function run() {
   const tests = [
     testPlainEnterPassthrough,
@@ -129,6 +263,17 @@ function run() {
     testCmdAUppercase,
     testCtrlEnterStillWorks,
     testEncodeCompat,
+    testCmdLeftLineStart,
+    testCmdRightLineEnd,
+    testCmdLeftKeypressSwallows,
+    testCmdUpBufferStart,
+    testCmdDownBufferEnd,
+    testCmdArrowWithCtrlIgnored,
+    testPlainArrowPassthrough,
+    testAltLeftPassthrough,
+    testAltDeleteWordForward,
+    testAltDeleteKeypressSwallows,
+    testCmdShiftArrowNotRemappedYet,
   ];
   let failed = 0;
   for (const t of tests) {
