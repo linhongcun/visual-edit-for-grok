@@ -1151,108 +1151,119 @@ async function handleTrustedAimSelection(rawSelection) {
   const prevSelection = priorWorkspace?.lastSelection || null;
   const prevScreenshotPath = priorWorkspace?.lastScreenshotPath || null;
   let uncommittedShotPath = null;
-  setCaptureBusy(true);
-  try {
-    const selection = attachSelectionContext(rawSelection);
-    if (!selection?.boundingBox) throw new Error("Invalid preview selection");
-    if (!isPreviewCapturable()) {
-      throw new Error("Preview changed during Aim — wait for it to finish loading and Aim again.");
-    }
-    const captureIdentity = snapshotPreviewIdentity();
-    await setPickMode(false);
-    if (!previewIdentityMatches(captureIdentity)) {
-      throw new Error("Preview changed during Aim — wait for it to finish loading and Aim again.");
-    }
-    const shot = await takeScreenshotFile({
-      bounds: selection.boundingBox,
-      reason: "pick",
-      padding: 72,
-    });
-    uncommittedShotPath = shot.path;
-    if (!shot.cropped) {
-      throw new Error("Could not capture the selected target — Aim again after the page settles.");
-    }
-    if (!previewIdentityMatches(captureIdentity)) {
-      throw new Error("Preview changed during Aim — capture discarded. Aim again after loading finishes.");
-    }
-    const resolvedAfterCapture = await resolveSelectionInPreview(selection);
-    const stableTarget = resolvedAfterCapture
-      ? attachSelectionContext(resolvedAfterCapture)
-      : null;
-    const stability = evaluateSelectionStability({
-      before: selection,
-      after: stableTarget,
-    });
-    if (!previewIdentityMatches(captureIdentity) || !stability.stable) {
-      throw new Error("Target changed during Aim — capture discarded. Aim again when the page is stable.");
-    }
-    const result = await deliverCapture(
-      selection,
-      shot.path,
-      "selection",
-      {
-        pasteToTerminal: true,
-        writeClipboard: true,
-        captureTarget,
-      },
-    );
-    const commit = resolvePickCommit({
-      ok: true,
-      selection,
-      screenshotPath: shot.path,
-      prevSelection,
-      prevScreenshotPath,
-    });
-    uncommittedShotPath = null;
-    const captureMeta = buildCaptureMeta({
-      kind: "selection",
-      selection: commit.lastSelection,
-      screenshotPath: commit.lastScreenshotPath,
-      shot,
-      result,
-      captureMode: "target-context",
-      captureTarget,
-    });
-    commitCaptureForTarget(captureTarget, {
-      selection: commit.lastSelection,
-      screenshotPath: commit.lastScreenshotPath,
-      captureMeta,
-      previewUrl: selection.pageUrl || captureTarget.previewUrl,
-      viewportPreset: captureTarget.viewportPreset,
-      viewportOrientation: captureTarget.viewportOrientation,
-    });
-    await clearPickerOverlay();
-    sendToRenderer("capture:result", {
-      kind: "selection",
-      selection: commit.lastSelection,
-      ...result,
-      screenshotPath: commit.lastScreenshotPath,
-      captureMeta,
-      targetSessionId: captureTarget.targetSessionId,
-    });
-    sendToRenderer("preview:status", previewStatusSnapshot());
-    if (
-      result.pastedToTerminal &&
-      captureTarget.targetSessionId === activeTerminalId
-    ) {
-      scheduleTerminalFocus({ reason: "pick" });
-    }
-  } catch (err) {
-    if (uncommittedShotPath) {
-      try {
-        fs.unlinkSync(uncommittedShotPath);
-      } catch {
-        // Capture cleanup will remove any file another process still holds.
+
+  // Must use withCaptureLock (not bare setCaptureBusy) so long Aim+deliver
+  // can fire Warp-style long-task desktop notifications when unfocused.
+  const locked = await withCaptureLock(async () => {
+    try {
+      const selection = attachSelectionContext(rawSelection);
+      if (!selection?.boundingBox) throw new Error("Invalid preview selection");
+      if (!isPreviewCapturable()) {
+        throw new Error("Preview changed during Aim — wait for it to finish loading and Aim again.");
       }
+      const captureIdentity = snapshotPreviewIdentity();
+      await setPickMode(false);
+      if (!previewIdentityMatches(captureIdentity)) {
+        throw new Error("Preview changed during Aim — wait for it to finish loading and Aim again.");
+      }
+      const shot = await takeScreenshotFile({
+        bounds: selection.boundingBox,
+        reason: "pick",
+        padding: 72,
+      });
+      uncommittedShotPath = shot.path;
+      if (!shot.cropped) {
+        throw new Error("Could not capture the selected target — Aim again after the page settles.");
+      }
+      if (!previewIdentityMatches(captureIdentity)) {
+        throw new Error("Preview changed during Aim — capture discarded. Aim again after loading finishes.");
+      }
+      const resolvedAfterCapture = await resolveSelectionInPreview(selection);
+      const stableTarget = resolvedAfterCapture
+        ? attachSelectionContext(resolvedAfterCapture)
+        : null;
+      const stability = evaluateSelectionStability({
+        before: selection,
+        after: stableTarget,
+      });
+      if (!previewIdentityMatches(captureIdentity) || !stability.stable) {
+        throw new Error("Target changed during Aim — capture discarded. Aim again when the page is stable.");
+      }
+      const result = await deliverCapture(
+        selection,
+        shot.path,
+        "selection",
+        {
+          pasteToTerminal: true,
+          writeClipboard: true,
+          captureTarget,
+        },
+      );
+      const commit = resolvePickCommit({
+        ok: true,
+        selection,
+        screenshotPath: shot.path,
+        prevSelection,
+        prevScreenshotPath,
+      });
+      uncommittedShotPath = null;
+      const captureMeta = buildCaptureMeta({
+        kind: "selection",
+        selection: commit.lastSelection,
+        screenshotPath: commit.lastScreenshotPath,
+        shot,
+        result,
+        captureMode: "target-context",
+        captureTarget,
+      });
+      commitCaptureForTarget(captureTarget, {
+        selection: commit.lastSelection,
+        screenshotPath: commit.lastScreenshotPath,
+        captureMeta,
+        previewUrl: selection.pageUrl || captureTarget.previewUrl,
+        viewportPreset: captureTarget.viewportPreset,
+        viewportOrientation: captureTarget.viewportOrientation,
+      });
+      await clearPickerOverlay();
+      sendToRenderer("capture:result", {
+        kind: "selection",
+        selection: commit.lastSelection,
+        ...result,
+        screenshotPath: commit.lastScreenshotPath,
+        captureMeta,
+        targetSessionId: captureTarget.targetSessionId,
+      });
+      sendToRenderer("preview:status", previewStatusSnapshot());
+      if (
+        result.pastedToTerminal &&
+        captureTarget.targetSessionId === activeTerminalId
+      ) {
+        scheduleTerminalFocus({ reason: "pick" });
+      }
+    } catch (err) {
+      if (uncommittedShotPath) {
+        try {
+          fs.unlinkSync(uncommittedShotPath);
+        } catch {
+          // Capture cleanup will remove any file another process still holds.
+        }
+      }
+      await setPickMode(false);
+      await clearPickerOverlay();
+      sendToRenderer("capture:result", {
+        kind: "error",
+        message: err instanceof Error ? err.message : String(err),
+      });
     }
+  }, { label: tr("notify.longTaskAimLabel") });
+
+  if (locked && locked.busy) {
     await setPickMode(false);
     await clearPickerOverlay();
     sendToRenderer("capture:result", {
       kind: "error",
-      message: err instanceof Error ? err.message : String(err),
+      message: locked.statusMessage || busyActionableText(),
     });
-  } finally {
-    setCaptureBusy(false);
   }
 }
 

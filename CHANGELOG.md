@@ -2,6 +2,14 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.8.4] — 2026-07-12
+
+### Fix: Aim path participates in long-task notifications
+
+- `handleTrustedAimSelection` now uses `withCaptureLock` (not bare `setCaptureBusy`)
+- Long Aim+deliver while unfocused can fire OS notifications like Frame/deliver
+- Structural unit test locks Aim → `withCaptureLock` wiring
+
 ## [0.8.3] — 2026-07-12
 
 ### Desktop notifications aligned with Warp macOS model

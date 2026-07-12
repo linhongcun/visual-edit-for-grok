@@ -3,6 +3,8 @@
  * Run: node test/notify-policy.test.cjs
  */
 const assert = require("assert");
+const fs = require("fs");
+const path = require("path");
 const {
   shouldShowDesktopNotification,
   clampLongTaskThresholdSec,
@@ -119,6 +121,32 @@ function testExactBoundary() {
   assert.strictEqual(exact.show, true);
 }
 
+/**
+ * Structural: Aim must go through withCaptureLock so long-task notify applies.
+ * Reads the shipped main.cjs source (not a reimplementation).
+ */
+function testAimPathUsesWithCaptureLock() {
+  const mainPath = path.join(__dirname, "../electron/main.cjs");
+  const main = fs.readFileSync(mainPath, "utf8");
+  const start = main.indexOf("async function handleTrustedAimSelection");
+  assert.ok(start >= 0, "handleTrustedAimSelection must exist");
+  const nextFn = main.indexOf("\nfunction createPreviewView", start);
+  const body =
+    nextFn > start ? main.slice(start, nextFn) : main.slice(start, start + 8000);
+  assert.ok(
+    body.includes("withCaptureLock"),
+    "Aim path must call withCaptureLock for long-task notifications",
+  );
+  assert.ok(
+    !body.includes("setCaptureBusy(true)"),
+    "Aim must not use bare setCaptureBusy(true); withCaptureLock owns the lock",
+  );
+  assert.ok(
+    body.includes("notify.longTaskAimLabel") || body.includes("longTaskAim"),
+    "Aim lock should label notifications as Aim",
+  );
+}
+
 function run() {
   const tests = [
     testFocusedNeverNotifies,
@@ -129,6 +157,7 @@ function run() {
     testOsUnsupported,
     testDefaultThresholdIsWarp30s,
     testExactBoundary,
+    testAimPathUsesWithCaptureLock,
   ];
   let failed = 0;
   for (const t of tests) {

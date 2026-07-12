@@ -8,7 +8,7 @@
 
 | Warp trigger | Source | VEFG map | Status |
 |--------------|--------|----------|--------|
-| Long-running command complete (≥ threshold, default **30s**) | `maybe_send_block_completed_notification` when `is_long_running_enabled` | Host **capture / Aim / Frame / deliver** exclusive work ≥ threshold | **done** (`notifyOnLongTask`) |
+| Long-running command complete (≥ threshold, default **30s**) | `maybe_send_block_completed_notification` when `is_long_running_enabled` | Host **capture / Aim / Frame / deliver** via `withCaptureLock` ≥ threshold | **done** (`notifyOnLongTask`; Aim uses `withCaptureLock` in `handleTrustedAimSelection`) |
 | Agent task completed / needs attention | `maybe_send_agent_mode_desktop_notification` | No host-visible Grok-turn signal | **out-of-scope** (would need Grok-side OSC/API) |
 | Password prompt | password heuristics | No shell-block parser | **out-of-scope** |
 | Session / process exit | (adjacent host concern) | PTY `onExit` | **done** (`notifyOnGrokExit`, pre-existing) |

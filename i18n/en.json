@@ -310,6 +310,7 @@
   "notify.longTaskTitle": "Task finished",
   "notify.longTaskBody": "{label} completed in {seconds}s",
   "notify.longTaskDefaultLabel": "Capture / deliver",
+  "notify.longTaskAimLabel": "Aim capture",
   "term.renameHint": "Double-click to rename · drag to reorder",
   "term.renameAria": "Rename terminal tab",
   "ctx.copy": "Copy",
