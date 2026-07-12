@@ -289,6 +289,7 @@
   "shortcuts.findNav": "Find next (Enter) / previous (Shift+Enter)",
   "shortcuts.paletteNav": "Palette: ↑/↓ select · Enter run",
   "shortcuts.urlEnter": "URL bar: Enter go · Shift+Enter ignored (single-line)",
+  "shortcuts.grokNewline": "Grok prompt: Shift+Enter or Alt+Enter = newline · Enter = send",
   "shortcuts.tabs": "New / close terminal tab",
   "shortcuts.font": "Larger / smaller / reset font",
   "shortcuts.focus": "Focus terminal / preview URL",

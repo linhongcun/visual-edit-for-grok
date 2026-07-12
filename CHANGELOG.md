@@ -2,6 +2,15 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.7.7] — 2026-07-12
+
+### Fix Grok TUI Shift+Enter newline in embedded xterm
+
+- **Root cause**: stock xterm.js encodes Shift+Enter as bare CR — identical to Enter — so Grok always submits
+- **Fix**: intercept Shift+Enter and write ESC+CR (same sequence Grok accepts for Alt+Enter newline)
+- Also map Ctrl+Enter → Kitty CSI-u `ESC[13;5u` for mid-turn interject when supported
+- Pure helper `src/terminal-key-encode.cjs` + unit tests
+
 ## [0.7.6] — 2026-07-12
 
 ### Fix palette Enter double-fire

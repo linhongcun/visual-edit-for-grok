@@ -289,6 +289,7 @@
   "shortcuts.findNav": "查找下一个 (Enter) / 上一个 (Shift+Enter)",
   "shortcuts.paletteNav": "命令面板：↑/↓ 选择 · Enter 执行",
   "shortcuts.urlEnter": "地址栏：Enter 打开 · Shift+Enter 不换行（单行）",
+  "shortcuts.grokNewline": "Grok 输入：Shift+Enter 或 Alt+Enter = 换行 · Enter = 发送",
   "shortcuts.tabs": "新建 / 关闭终端标签",
   "shortcuts.font": "放大 / 缩小 / 重置字号",
   "shortcuts.focus": "聚焦终端 / 预览地址栏",

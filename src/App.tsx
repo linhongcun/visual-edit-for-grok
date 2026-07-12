@@ -2989,6 +2989,7 @@ export default function App() {
                     ["Enter / ⇧Enter", "shortcuts.findNav"],
                     ["⌘K · ↑↓ · Enter", "shortcuts.paletteNav"],
                     ["Enter · ⇧Enter", "shortcuts.urlEnter"],
+                    ["⇧Enter · ⌥Enter", "shortcuts.grokNewline"],
                     ["⌘T / ⌘W", "shortcuts.tabs"],
                     ["⌘+ / ⌘- / ⌘0", "shortcuts.font"],
                     ["⌘1 / ⌘2", "shortcuts.focus"],
