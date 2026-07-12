@@ -42,6 +42,9 @@ contextBridge.exposeInMainWorld("vefg", {
     ipcRenderer.invoke("layout:set-split", ratio, opts || {}),
   setPreviewCollapsed: (collapsed) =>
     ipcRenderer.invoke("layout:set-preview-collapsed", Boolean(collapsed)),
+  layoutMaximize: (action) =>
+    ipcRenderer.invoke("layout:maximize", action || "none"),
+  recoverPreview: () => ipcRenderer.invoke("preview:recover"),
 
   terminalList: () => ipcRenderer.invoke("terminal:list"),
   terminalCreate: (opts) =>

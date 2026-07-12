@@ -183,8 +183,11 @@ const {
   evaluateSelectionStability,
   resolvePickCommit,
   computeWorkspaceLayout,
+  resolveWorkspaceMaximize,
+  planPreviewRecovery,
   DEFAULT_CLEANUP_MIN_INTERVAL_MS,
   DEFAULT_SETTINGS_DEBOUNCE_MS,
+  DEFAULT_PREVIEW_RECOVERY_MAX,
 } = require("./runtime-policy.cjs");
 const { resolveGrokBinary } = require("./terminal.cjs");
 
@@ -522,6 +525,12 @@ let lastCaptureMeta = null;
 let lastVerifyPair = null;
 /** Left pane ratio 0–1 */
 let splitRatio = 0.52;
+/** Wave-style maximize: null | "terminal" | "preview" (session memory only). */
+let layoutMaximized = null;
+let layoutRestoreSplitRatio = null;
+let layoutRestorePreviewCollapsed = null;
+/** Bounded preview soft-recovery attempts (Wave reconnect spirit). */
+let previewRecoveryCount = 0;
 /** Hide preview WebContentsView + URL chrome; terminal uses full width */
 let previewCollapsed = false;
 /** @type {"en" | "zh"} */
@@ -991,6 +1000,22 @@ function installAppMenu() {
           accelerator: "CommandOrControl+Shift+P",
           click: () => emitMenuAction("toggle-preview"),
         },
+        {
+          label: "Maximize Terminal",
+          accelerator: "CommandOrControl+Shift+M",
+          click: () => emitMenuAction("maximize-terminal"),
+        },
+        {
+          label: "Maximize Preview",
+          accelerator: "CommandOrControl+Shift+E",
+          click: () => emitMenuAction("maximize-preview"),
+        },
+        {
+          label: "Recover Preview",
+          click: () => {
+            softRecoverPreview();
+          },
+        },
         { type: "separator" },
         {
           label: "Settings…",
@@ -1280,8 +1305,78 @@ async function handleTrustedAimSelection(rawSelection) {
   }
 }
 
+function destroyPreviewView() {
+  if (!previewView) return;
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.contentView.removeChildView(previewView);
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    if (!previewView.webContents.isDestroyed()) {
+      previewView.webContents.close({ waitForBeforeUnload: false });
+    }
+  } catch {
+    /* ignore */
+  }
+  previewView = null;
+}
+
+/**
+ * Wave-inspired soft recovery: recreate preview WebContentsView without
+ * killing the main window or Grok PTY tabs.
+ * @returns {{ ok: boolean, action: string, reason: string }}
+ */
+function softRecoverPreview() {
+  const plan = planPreviewRecovery({
+    hasMainWindow: Boolean(mainWindow && !mainWindow.isDestroyed()),
+    previewMissing: !previewView,
+    previewDestroyed: Boolean(
+      previewView && previewView.webContents?.isDestroyed(),
+    ),
+    recoveryCount: previewRecoveryCount,
+    maxRecoveries: DEFAULT_PREVIEW_RECOVERY_MAX,
+  });
+  if (plan.action !== "recreate") {
+    return { ok: false, action: plan.action, reason: plan.reason };
+  }
+  previewRecoveryCount = plan.nextRecoveryCount;
+  try {
+    destroyPreviewView();
+    createPreviewView();
+    layoutViews();
+    previewError = null;
+    sendToRenderer("preview:status", {
+      ...previewStatusSnapshot(),
+      recovered: true,
+      recoveryCount: previewRecoveryCount,
+    });
+    return { ok: true, action: "recreate", reason: plan.reason };
+  } catch (err) {
+    reportMainFault(
+      {
+        code: "preview-recovery-failed",
+        message: err instanceof Error ? err.message : String(err),
+        source: "preview",
+      },
+      { throttleKey: "preview-recovery-failed" },
+    );
+    return { ok: false, action: "recreate", reason: "recreate-threw" };
+  }
+}
+
 function createPreviewView() {
   if (!mainWindow) return;
+  // Avoid stacking orphan views if caller did not destroy first
+  if (previewView) {
+    try {
+      destroyPreviewView();
+    } catch {
+      /* ignore */
+    }
+  }
 
   const sessionPolicy = buildPreviewSessionPolicy({ privateMode });
 
@@ -1516,7 +1611,7 @@ function createPreviewView() {
     sendToRenderer("preview:status", previewStatusSnapshot());
   });
 
-  // browser-use CrashWatchdog spirit: surface renderer death without killing main
+  // browser-use CrashWatchdog + Wave reconnect spirit: report and soft-recover
   previewView.webContents.on("render-process-gone", (_event, details) => {
     reportMainFault(
       {
@@ -1526,6 +1621,14 @@ function createPreviewView() {
       },
       { throttleKey: `preview-crash:${details?.reason || "x"}` },
     );
+    // Defer recreate so Electron can finish teardown of the dead process
+    setTimeout(() => {
+      try {
+        softRecoverPreview();
+      } catch {
+        /* ignore */
+      }
+    }, 50);
   });
   previewView.webContents.on("unresponsive", () => {
     reportMainFault(
@@ -1633,6 +1736,7 @@ function getLayoutBounds() {
       splitRatio: layout.splitRatio,
       previewCollapsed: layout.previewCollapsed,
       splitterVisible: layout.splitterVisible,
+      maximized: layoutMaximized,
     };
   }
   const [width, height] = mainWindow.getContentSize();
@@ -1657,6 +1761,7 @@ function getLayoutBounds() {
     splitRatio: layout.splitRatio,
     previewCollapsed: layout.previewCollapsed,
     splitterVisible: layout.splitterVisible,
+    maximized: layoutMaximized,
   };
 }
 
@@ -1728,14 +1833,55 @@ function layoutViews() {
     splitRatio: layout.splitRatio,
     previewCollapsed: layout.previewCollapsed,
     splitterVisible: layout.splitterVisible,
+    maximized: layoutMaximized,
   });
 }
 
 function setPreviewCollapsed(next, { forcePersist = true } = {}) {
   previewCollapsed = Boolean(next);
+  // Manual collapse exits maximize mode without clobbering restore snapshot
+  if (layoutMaximized) {
+    layoutMaximized = null;
+    layoutRestoreSplitRatio = null;
+    layoutRestorePreviewCollapsed = null;
+  }
   persistDebounced({ previewCollapsed }, { force: forcePersist });
   layoutViews();
-  return getLayoutBounds();
+  return { ...getLayoutBounds(), maximized: layoutMaximized };
+}
+
+/**
+ * Wave-style maximize: expand terminal or preview; toggle again restores.
+ * @param {"terminal"|"preview"|"none"|"toggle-terminal"|"toggle-preview"} action
+ */
+function applyWorkspaceMaximize(action) {
+  const next = resolveWorkspaceMaximize(
+    {
+      splitRatio,
+      previewCollapsed,
+      maximized: layoutMaximized,
+      restoreSplitRatio: layoutRestoreSplitRatio,
+      restorePreviewCollapsed: layoutRestorePreviewCollapsed,
+    },
+    action,
+  );
+  splitRatio = next.splitRatio;
+  previewCollapsed = next.previewCollapsed;
+  layoutMaximized = next.maximized;
+  layoutRestoreSplitRatio = next.restoreSplitRatio;
+  layoutRestorePreviewCollapsed = next.restorePreviewCollapsed;
+  // Persist only durable layout fields — never "maximized" itself
+  persistDebounced(
+    { splitRatio, previewCollapsed },
+    { force: true },
+  );
+  layoutViews();
+  const bounds = getLayoutBounds();
+  sendToRenderer("layout:bounds", {
+    ...bounds,
+    maximized: layoutMaximized,
+  });
+  return { ...bounds, maximized: layoutMaximized, changed: next.changed };
 }
 
 async function setPickMode(enabled) {
@@ -3619,16 +3765,29 @@ function registerIpc() {
     const r = Number(ratio);
     if (!Number.isFinite(r)) return getLayoutBounds();
     splitRatio = Math.min(0.75, Math.max(0.22, r));
+    // Dragging the splitter exits maximize (keep durable split)
+    if (layoutMaximized) {
+      layoutMaximized = null;
+      layoutRestoreSplitRatio = null;
+      layoutRestorePreviewCollapsed = null;
+    }
     // Live layout always; disk write debounced unless final flush (mouseup)
     const force = Boolean(opts?.force ?? opts?.persist);
     persistDebounced({ splitRatio }, { force });
     layoutViews();
-    return getLayoutBounds();
+    return { ...getLayoutBounds(), maximized: layoutMaximized };
   });
 
   ipcMain.handle("layout:set-preview-collapsed", async (_e, collapsed) => {
     return setPreviewCollapsed(Boolean(collapsed), { forcePersist: true });
   });
+
+  ipcMain.handle("layout:maximize", async (_e, action) => {
+    const act = String(action || "none");
+    return applyWorkspaceMaximize(act);
+  });
+
+  ipcMain.handle("preview:recover", async () => softRecoverPreview());
 
   ipcMain.handle("project:pick-cwd", async () => {
     const result = await dialog.showOpenDialog(mainWindow, {

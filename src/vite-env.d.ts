@@ -182,8 +182,23 @@ export interface VefgApi {
   setSplit: (
     ratio: number,
     opts?: { force?: boolean; persist?: boolean },
-  ) => Promise<LayoutBounds>;
-  setPreviewCollapsed: (collapsed: boolean) => Promise<LayoutBounds>;
+  ) => Promise<LayoutBounds & { maximized?: string | null }>;
+  setPreviewCollapsed: (
+    collapsed: boolean,
+  ) => Promise<LayoutBounds & { maximized?: string | null }>;
+  layoutMaximize: (
+    action:
+      | "terminal"
+      | "preview"
+      | "toggle-terminal"
+      | "toggle-preview"
+      | "none",
+  ) => Promise<LayoutBounds & { maximized?: string | null; changed?: boolean }>;
+  recoverPreview: () => Promise<{
+    ok: boolean;
+    action: string;
+    reason: string;
+  }>;
   terminalList: () => Promise<{
     sessions: Array<{
       id: string;

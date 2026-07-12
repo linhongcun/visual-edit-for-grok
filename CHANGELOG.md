@@ -2,6 +2,15 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.8.11] — 2026-07-12
+
+### Wave Terminal-inspired maximize + preview soft recovery
+
+- One-click maximize terminal (⌘⇧M) or preview (⌘⇧E); press again to restore prior split/collapse (session memory only)
+- Soft-recover preview WebContentsView after `render-process-gone` (bounded); menu **Recover Preview**
+- Pure helpers `resolveWorkspaceMaximize` / `planPreviewRecovery`; inventory `docs/WAVETERM-INVENTORY.md`
+- Out of scope: Wave AI, SSH durable sessions, multi-block tiling, wsh
+
 ## [0.8.10] — 2026-07-12
 
 ### Stability practices from agent-browser / browser-use / playwright-mcp

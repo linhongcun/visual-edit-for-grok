@@ -961,6 +961,193 @@ function computeWorkspaceLayout(input = {}) {
   };
 }
 
+/** Min terminal share when preview is maximized (Wave magnify spirit). */
+const MAXIMIZE_PREVIEW_SPLIT_RATIO = 0.22;
+/** Max soft recoveries of the preview view per window (bounded). */
+const DEFAULT_PREVIEW_RECOVERY_MAX = 3;
+
+/**
+ * Clamp split ratio used by workspace layout (same bounds as settings-store).
+ * @param {unknown} value
+ * @returns {number}
+ */
+function clampSplitRatio(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0.52;
+  return Math.min(0.75, Math.max(0.22, n));
+}
+
+/**
+ * Wave-style one-click maximize for terminal or preview pane.
+ * Saves prior split/collapse in memory so restore is exact; does not invent
+ * a multi-block tiling grid.
+ *
+ * @param {{
+ *   splitRatio?: number,
+ *   previewCollapsed?: boolean,
+ *   maximized?: null | "terminal" | "preview",
+ *   restoreSplitRatio?: number | null,
+ *   restorePreviewCollapsed?: boolean | null,
+ * }} state
+ * @param {"terminal" | "preview" | "none" | "toggle-terminal" | "toggle-preview"} action
+ * @returns {{
+ *   splitRatio: number,
+ *   previewCollapsed: boolean,
+ *   maximized: null | "terminal" | "preview",
+ *   restoreSplitRatio: number | null,
+ *   restorePreviewCollapsed: boolean | null,
+ *   changed: boolean,
+ * }}
+ */
+function resolveWorkspaceMaximize(state = {}, action = "none") {
+  const splitRatio = clampSplitRatio(state.splitRatio);
+  const previewCollapsed = Boolean(state.previewCollapsed);
+  const maximized =
+    state.maximized === "terminal" || state.maximized === "preview"
+      ? state.maximized
+      : null;
+  const hasRestore =
+    state.restoreSplitRatio != null &&
+    Number.isFinite(Number(state.restoreSplitRatio));
+  const restoreSplitRatio = hasRestore
+    ? clampSplitRatio(state.restoreSplitRatio)
+    : null;
+  const restorePreviewCollapsed =
+    typeof state.restorePreviewCollapsed === "boolean"
+      ? state.restorePreviewCollapsed
+      : null;
+
+  let act = action;
+  if (act === "toggle-terminal") {
+    act = maximized === "terminal" ? "none" : "terminal";
+  } else if (act === "toggle-preview") {
+    act = maximized === "preview" ? "none" : "preview";
+  }
+
+  const restore = () => ({
+    splitRatio: restoreSplitRatio != null ? restoreSplitRatio : splitRatio,
+    previewCollapsed:
+      restorePreviewCollapsed != null ? restorePreviewCollapsed : false,
+    maximized: null,
+    restoreSplitRatio: null,
+    restorePreviewCollapsed: null,
+    changed: maximized != null || previewCollapsed || splitRatio !== (restoreSplitRatio ?? splitRatio),
+  });
+
+  if (act === "none") {
+    if (maximized == null && restoreSplitRatio == null) {
+      return {
+        splitRatio,
+        previewCollapsed,
+        maximized: null,
+        restoreSplitRatio: null,
+        restorePreviewCollapsed: null,
+        changed: false,
+      };
+    }
+    return restore();
+  }
+
+  if (act === "terminal") {
+    if (maximized === "terminal") return restore();
+    return {
+      splitRatio: splitRatio,
+      previewCollapsed: true,
+      maximized: "terminal",
+      restoreSplitRatio:
+        maximized != null && restoreSplitRatio != null
+          ? restoreSplitRatio
+          : splitRatio,
+      restorePreviewCollapsed:
+        maximized != null && restorePreviewCollapsed != null
+          ? restorePreviewCollapsed
+          : previewCollapsed,
+      changed: true,
+    };
+  }
+
+  if (act === "preview") {
+    if (maximized === "preview") return restore();
+    return {
+      splitRatio: MAXIMIZE_PREVIEW_SPLIT_RATIO,
+      previewCollapsed: false,
+      maximized: "preview",
+      restoreSplitRatio:
+        maximized != null && restoreSplitRatio != null
+          ? restoreSplitRatio
+          : splitRatio,
+      restorePreviewCollapsed:
+        maximized != null && restorePreviewCollapsed != null
+          ? restorePreviewCollapsed
+          : previewCollapsed,
+      changed: true,
+    };
+  }
+
+  return {
+    splitRatio,
+    previewCollapsed,
+    maximized,
+    restoreSplitRatio,
+    restorePreviewCollapsed,
+    changed: false,
+  };
+}
+
+/**
+ * Plan soft recovery for a broken preview WebContentsView (Wave reconnect spirit
+ * mapped to local preview, not SSH).
+ *
+ * @param {{
+ *   hasMainWindow?: boolean,
+ *   previewMissing?: boolean,
+ *   previewDestroyed?: boolean,
+ *   recoveryCount?: number,
+ *   maxRecoveries?: number,
+ * }} input
+ * @returns {{
+ *   action: "recreate" | "none",
+ *   reason: string,
+ *   nextRecoveryCount: number,
+ * }}
+ */
+function planPreviewRecovery(input = {}) {
+  const maxRecoveries = Math.max(
+    0,
+    Math.min(
+      20,
+      Number(input.maxRecoveries) || DEFAULT_PREVIEW_RECOVERY_MAX,
+    ),
+  );
+  const recoveryCount = Math.max(0, Number(input.recoveryCount) || 0);
+  if (!input.hasMainWindow) {
+    return {
+      action: "none",
+      reason: "no-main-window",
+      nextRecoveryCount: recoveryCount,
+    };
+  }
+  if (recoveryCount >= maxRecoveries) {
+    return {
+      action: "none",
+      reason: "recovery-budget-exhausted",
+      nextRecoveryCount: recoveryCount,
+    };
+  }
+  if (input.previewMissing || input.previewDestroyed) {
+    return {
+      action: "recreate",
+      reason: input.previewMissing ? "preview-missing" : "preview-destroyed",
+      nextRecoveryCount: recoveryCount + 1,
+    };
+  }
+  return {
+    action: "none",
+    reason: "preview-ok",
+    nextRecoveryCount: recoveryCount,
+  };
+}
+
 /**
  * Plan reaction when Aim emits a DOM selection while capture may be in flight.
  * Picker page has already exited pickMode locally; main must stay consistent:
@@ -1068,6 +1255,8 @@ function resolvePickCommit(input = {}) {
 module.exports = {
   DEFAULT_CLEANUP_MIN_INTERVAL_MS,
   DEFAULT_SETTINGS_DEBOUNCE_MS,
+  MAXIMIZE_PREVIEW_SPLIT_RATIO,
+  DEFAULT_PREVIEW_RECOVERY_MAX,
   canStartCapture,
   mayStartCaptureAction,
   classifyGrokUiState,
@@ -1084,6 +1273,9 @@ module.exports = {
   focusHandoffDelays,
   operatorActionState,
   computeWorkspaceLayout,
+  clampSplitRatio,
+  resolveWorkspaceMaximize,
+  planPreviewRecovery,
   planAimPickEvent,
   resolvePickCommit,
 };

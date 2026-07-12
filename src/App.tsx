@@ -491,6 +491,12 @@ export default function App() {
       case "toggle-preview":
         void applyPreviewCollapsed(!previewCollapsedRef.current);
         break;
+      case "maximize-terminal":
+        void applyLayoutMaximize("toggle-terminal");
+        break;
+      case "maximize-preview":
+        void applyLayoutMaximize("toggle-preview");
+        break;
       case "aim":
         void togglePickRef.current();
         break;
@@ -1223,6 +1229,29 @@ export default function App() {
       previewCollapsedRef.current = Boolean(
         bounds.previewCollapsed ?? collapsed,
       );
+      if (bounds.terminalWidth) setTerminalWidth(bounds.terminalWidth);
+      requestAnimationFrame(() => requestTerminalFit());
+    } catch (err) {
+      toastError(err);
+    }
+  }
+
+  /** Wave-style maximize: expand terminal or preview; toggle again restores. */
+  async function applyLayoutMaximize(
+    action:
+      | "terminal"
+      | "preview"
+      | "toggle-terminal"
+      | "toggle-preview"
+      | "none",
+  ) {
+    if (!isElectron() || !window.vefg.layoutMaximize) return;
+    try {
+      const bounds = await window.vefg.layoutMaximize(action);
+      if (typeof bounds.previewCollapsed === "boolean") {
+        setPreviewCollapsed(bounds.previewCollapsed);
+        previewCollapsedRef.current = bounds.previewCollapsed;
+      }
       if (bounds.terminalWidth) setTerminalWidth(bounds.terminalWidth);
       requestAnimationFrame(() => requestTerminalFit());
     } catch (err) {
@@ -2195,6 +2224,24 @@ export default function App() {
             role="group"
             aria-label={tr("actions.appChromeAria")}
           >
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => void applyLayoutMaximize("toggle-terminal")}
+              title={tr("pane.maximizeTerminalTitle")}
+              aria-label={tr("pane.maximizeTerminalAria")}
+            >
+              {tr("pane.maximizeTerminal")}
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => void applyLayoutMaximize("toggle-preview")}
+              title={tr("pane.maximizePreviewTitle")}
+              aria-label={tr("pane.maximizePreviewAria")}
+            >
+              {tr("pane.maximizePreview")}
+            </button>
             {previewCollapsed ? (
               <>
                 <button
@@ -3060,6 +3107,7 @@ export default function App() {
                     ["⌘1 / ⌘2", "shortcuts.focus"],
                     ["⌘⇧A / ⌘⇧F / ⌘⇧V", "shortcuts.capture"],
                     ["⌘⇧P", "shortcuts.preview"],
+                    ["⌘⇧M / ⌘⇧E", "shortcuts.maximize"],
                     ["⌘K", "shortcuts.palette"],
                     ["⌘,", "shortcuts.settings"],
                     ["⌘/", "shortcuts.this"],
