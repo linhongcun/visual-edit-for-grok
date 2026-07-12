@@ -9,6 +9,7 @@ import {
   trackpadScrollPixelsFromFrame,
   trackpadTuiWheelImpulseFromFrame,
 } from "../trackpad-scroll.cjs";
+import { resolveTerminalLinkTarget } from "../link-open-policy.cjs";
 import "@xterm/xterm/css/xterm.css";
 
 /** Slightly smaller than 13 so the same pane fits more columns (helps wide CJK tables). */
@@ -41,18 +42,11 @@ interface Props {
   fitNonce?: number;
   /**
    * Open http(s) links from the terminal in the in-app preview.
-   * ⌘/Ctrl+click still uses the system browser via openExternal.
+   * ⌘/Ctrl+click uses the system browser via openExternal instead.
    */
   onOpenHttpUrl?: (url: string) => void;
-}
-
-function isHttpUrl(uri: string): boolean {
-  try {
-    const parsed = new URL(uri);
-    return parsed.protocol === "http:" || parsed.protocol === "https:";
-  } catch {
-    return false;
-  }
+  /** Optional toast/status when a link opens in the system browser */
+  onOpenHttpUrlExternal?: (url: string) => void;
 }
 
 export default function TerminalPane({
@@ -61,6 +55,7 @@ export default function TerminalPane({
   focusNonce = 0,
   fitNonce = 0,
   onOpenHttpUrl,
+  onOpenHttpUrlExternal,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -72,6 +67,7 @@ export default function TerminalPane({
   const resizeTimerRef = useRef<number | null>(null);
   const sessionIdRef = useRef(sessionId);
   const onOpenHttpUrlRef = useRef(onOpenHttpUrl);
+  const onOpenHttpUrlExternalRef = useRef(onOpenHttpUrlExternal);
   /** Pixel-mode deltaY summed within the current animation frame */
   const wheelFrameDeltaRef = useRef(0);
   const wheelFrameRafRef = useRef<number | null>(null);
@@ -86,6 +82,10 @@ export default function TerminalPane({
   useEffect(() => {
     onOpenHttpUrlRef.current = onOpenHttpUrl;
   }, [onOpenHttpUrl]);
+
+  useEffect(() => {
+    onOpenHttpUrlExternalRef.current = onOpenHttpUrlExternal;
+  }, [onOpenHttpUrlExternal]);
 
   function clearFocusTimer() {
     if (focusTimerRef.current != null) {
@@ -229,16 +229,23 @@ export default function TerminalPane({
     term.unicode.activeVersion = "11";
     term.loadAddon(
       new WebLinksAddon((event, uri) => {
-        // ⌘/Ctrl+click → system browser; plain click http(s) → right preview
-        const preferExternal =
-          Boolean(event?.metaKey) || Boolean(event?.ctrlKey);
-        if (!preferExternal && isHttpUrl(uri) && onOpenHttpUrlRef.current) {
+        // Plain click → right preview; ⌘/Ctrl+click → macOS default browser
+        const target = resolveTerminalLinkTarget(uri, event);
+        if (target === "preview" && onOpenHttpUrlRef.current) {
           onOpenHttpUrlRef.current(uri);
           return;
         }
-        void window.vefg.openExternal(uri).catch(() => {
-          // Main validates schemes and owns the native browser handoff.
-        });
+        if (target === "system") {
+          void window.vefg
+            .openExternal(uri)
+            .then(() => {
+              onOpenHttpUrlExternalRef.current?.(uri);
+            })
+            .catch(() => {
+              // Main validates schemes and owns the native browser handoff.
+            });
+          return;
+        }
       }),
     );
     term.open(hostRef.current);

@@ -2055,6 +2055,13 @@ export default function App() {
                 onOpenHttpUrl={(url) => {
                   void openPreviewUrl(url, { fromTerminal: true });
                 }}
+                onOpenHttpUrlExternal={(url) => {
+                  showToast(
+                    tr("toast.previewInSystemBrowser", {
+                      url: shortPath(url, 56),
+                    }),
+                  );
+                }}
               />
             ) : null}
             {termTabs.map((tab) => (
@@ -2072,6 +2079,13 @@ export default function App() {
                   fitNonce={tab.id === activeTermId ? termFitNonce : 0}
                   onOpenHttpUrl={(url) => {
                     void openPreviewUrl(url, { fromTerminal: true });
+                  }}
+                  onOpenHttpUrlExternal={(url) => {
+                    showToast(
+                      tr("toast.previewInSystemBrowser", {
+                        url: shortPath(url, 56),
+                      }),
+                    );
                   }}
                 />
               </div>

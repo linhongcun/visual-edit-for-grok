@@ -139,6 +139,7 @@
   "toast.stateFailed": "无法读取应用状态：{error}",
   "toast.navFailed": "预览导航失败：{error}",
   "toast.previewFromTerminal": "预览：{url}",
+  "toast.previewInSystemBrowser": "已在系统浏览器打开：{url}",
   "toast.staleTargetFrame": "目标属于之前的页面，取景将改为全视口。",
   "toast.noTargetFrame": "未选中目标，取景将捕获全视口。",
   "toast.shellOffCopy": "终端未开；捕获将复制到剪贴板供手动粘贴。",

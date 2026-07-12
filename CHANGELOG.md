@@ -2,6 +2,14 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.6.10] — 2026-07-12
+
+### Terminal link open policy
+
+- Plain click `http(s)` → in-app preview
+- **⌘+click** (macOS) / Ctrl+click → **system default browser**
+- Pure `resolveTerminalLinkTarget` + unit tests; toast when opening externally
+
 ## [0.6.9] — 2026-07-12
 
 ### Open terminal links in the right preview
