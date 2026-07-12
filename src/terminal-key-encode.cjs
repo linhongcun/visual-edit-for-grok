@@ -8,8 +8,8 @@
  * Ctrl+Enter   → Kitty CSI-u Enter+Ctrl (interject)
  * Cmd+A        → Kitty Super+A (select all; Grok enables this when
  *                TERM_PROGRAM looks like Ghostty)
- * Cmd+Backspace / Cmd+Delete → Ctrl+A then Ctrl+K (clear *current* line only,
- *                not the whole multiline composer; Super+A+DEL was wrong)
+ * Cmd+Backspace → Ctrl+U (delete from cursor to line start; Warp DeleteAllLeft)
+ * Cmd+Delete    → Ctrl+K (delete from cursor to line end; Warp DeleteAllRight)
  * Cmd+← / Cmd+→ → Ctrl+A / Ctrl+E (line start / end; xterm no-ops meta+arrow)
  * Cmd+↑ / Cmd+↓ → Ctrl+Home / Ctrl+End (buffer start / end)
  * Alt+Delete   → ESC d (forward word delete; stock CSI is unreliable in Grok)
@@ -45,11 +45,10 @@ const SEQ_BUFFER_START = "\x1b[1;5H";
 const SEQ_BUFFER_END = "\x1b[1;5F";
 /** readline kill-word-forward (alt-d) */
 const SEQ_WORD_DELETE_FORWARD = "\x1bd";
-/**
- * Clear the *current* visual/logical line only: go to line start (Ctrl+A),
- * then kill to end of line (Ctrl+K). Does not select-all the whole buffer.
- */
-const SEQ_CLEAR_CURRENT_LINE = "\x01\x0b";
+/** readline unix-line-discard: kill from cursor to beginning of line (Warp cmd-backspace) */
+const SEQ_DELETE_ALL_LEFT = "\x15";
+/** readline kill-line: kill from cursor to end of line (Warp cmd-delete) */
+const SEQ_DELETE_ALL_RIGHT = "\x0b";
 
 function isEnterKey(event) {
   return (
@@ -174,15 +173,22 @@ function resolveGrokHostKey(event) {
     );
   }
 
-  // Cmd+Backspace / Cmd+Delete → clear *current line* only (Ctrl+A + Ctrl+K).
-  // Do NOT Super+A+DEL: that wipes the entire multiline Grok composer.
-  // Warp splits left-of-cursor vs right-of-cursor; users asked for line clear.
-  if ((isBackspaceKey(event) || isForwardDeleteKey(event)) && !shift) {
+  // Cmd+Backspace → delete all left (Warp / macOS); Cmd+Delete → delete all right.
+  // Never Super+A+DEL (that wiped the whole multiline composer).
+  if (isBackspaceKey(event) && !shift) {
     return writeOrSwallow(
       type,
-      SEQ_CLEAR_CURRENT_LINE,
-      "cmd-backspace-clear-line",
+      SEQ_DELETE_ALL_LEFT,
+      "cmd-backspace-delete-left",
       "cmd-backspace-swallow",
+    );
+  }
+  if (isForwardDeleteKey(event) && !shift) {
+    return writeOrSwallow(
+      type,
+      SEQ_DELETE_ALL_RIGHT,
+      "cmd-delete-delete-right",
+      "cmd-delete-swallow",
     );
   }
 
@@ -268,5 +274,6 @@ module.exports = {
   SEQ_BUFFER_START,
   SEQ_BUFFER_END,
   SEQ_WORD_DELETE_FORWARD,
-  SEQ_CLEAR_CURRENT_LINE,
+  SEQ_DELETE_ALL_LEFT,
+  SEQ_DELETE_ALL_RIGHT,
 };

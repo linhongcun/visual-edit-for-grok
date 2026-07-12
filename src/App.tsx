@@ -3002,7 +3002,7 @@ export default function App() {
                     ["⌘K · ↑↓ · Enter", "shortcuts.paletteNav"],
                     ["Enter · ⇧Enter", "shortcuts.urlEnter"],
                     ["⇧Enter · ⌥Enter", "shortcuts.grokNewline"],
-                    ["⌘⌫ / ⌘⌦", "shortcuts.grokClearLine"],
+                    ["⌘⌫ · ⌘⌦", "shortcuts.grokClearLine"],
                     ["⌘A", "shortcuts.grokSelectAll"],
                     ["⌘← / ⌘→", "shortcuts.grokLineNav"],
                     ["⌘↑ / ⌘↓", "shortcuts.grokBufferNav"],

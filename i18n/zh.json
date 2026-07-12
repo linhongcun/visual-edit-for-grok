@@ -290,7 +290,7 @@
   "shortcuts.paletteNav": "命令面板：↑/↓ 选择 · Enter 执行",
   "shortcuts.urlEnter": "地址栏：Enter 打开 · Shift+Enter 不换行（单行）",
   "shortcuts.grokNewline": "Grok 输入：Shift+Enter 或 Alt+Enter = 换行 · Enter = 发送",
-  "shortcuts.grokClearLine": "Grok 输入：⌘⌫ / ⌘⌦ = 只删除当前行（不会清空全部多行内容）",
+  "shortcuts.grokClearLine": "Grok 输入：⌘⌫ = 删到行首 · ⌘⌦ = 删到行尾",
   "shortcuts.grokSelectAll": "Grok 输入：⌘A = 全选输入内容",
   "shortcuts.grokLineNav": "Grok 输入：⌘← / ⌘→ = 行首 / 行尾",
   "shortcuts.grokBufferNav": "Grok 输入：⌘↑ / ⌘↓ = 缓冲区开头 / 结尾",

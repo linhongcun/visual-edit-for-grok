@@ -290,7 +290,7 @@
   "shortcuts.paletteNav": "Palette: ↑/↓ select · Enter run",
   "shortcuts.urlEnter": "URL bar: Enter go · Shift+Enter ignored (single-line)",
   "shortcuts.grokNewline": "Grok prompt: Shift+Enter or Alt+Enter = newline · Enter = send",
-  "shortcuts.grokClearLine": "Grok prompt: ⌘⌫ / ⌘⌦ = clear current line only (not all lines)",
+  "shortcuts.grokClearLine": "Grok prompt: ⌘⌫ = delete to line start · ⌘⌦ = delete to line end",
   "shortcuts.grokSelectAll": "Grok prompt: ⌘A = select all in composer",
   "shortcuts.grokLineNav": "Grok prompt: ⌘← / ⌘→ = line start / end",
   "shortcuts.grokBufferNav": "Grok prompt: ⌘↑ / ⌘↓ = buffer start / end",

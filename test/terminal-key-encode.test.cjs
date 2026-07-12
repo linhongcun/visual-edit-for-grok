@@ -13,7 +13,8 @@ const {
   SEQ_BUFFER_START,
   SEQ_BUFFER_END,
   SEQ_WORD_DELETE_FORWARD,
-  SEQ_CLEAR_CURRENT_LINE,
+  SEQ_DELETE_ALL_LEFT,
+  SEQ_DELETE_ALL_RIGHT,
 } = require("../src/terminal-key-encode.cjs");
 
 function testPlainEnterPassthrough() {
@@ -44,7 +45,7 @@ function testShiftEnterKeypressSwallows() {
   assert.strictEqual(r.action, "swallow");
 }
 
-function testCmdBackspaceClearsCurrentLineOnly() {
+function testCmdBackspaceDeletesAllLeft() {
   const r = resolveGrokHostKey({
     type: "keydown",
     key: "Backspace",
@@ -52,17 +53,17 @@ function testCmdBackspaceClearsCurrentLineOnly() {
   });
   assert.ok(r);
   assert.strictEqual(r.action, "write");
-  assert.strictEqual(r.reason, "cmd-backspace-clear-line");
-  // Ctrl+A + Ctrl+K — current line only, not Super+A (whole buffer)
-  assert.strictEqual(r.sequence, SEQ_CLEAR_CURRENT_LINE);
-  assert.strictEqual(r.sequence, "\x01\x0b");
+  assert.strictEqual(r.reason, "cmd-backspace-delete-left");
+  // Ctrl+U — cursor to line start (Warp DeleteAllLeft / macOS)
+  assert.strictEqual(r.sequence, SEQ_DELETE_ALL_LEFT);
+  assert.strictEqual(r.sequence, "\x15");
   assert.notStrictEqual(
     r.sequence,
     `\x1b[${KITTY_KEY_A};${KITTY_MOD_SUPER}u\x7f`,
   );
 }
 
-function testCmdDeleteSameAsCmdBackspace() {
+function testCmdDeleteDeletesAllRight() {
   const r = resolveGrokHostKey({
     type: "keydown",
     key: "Delete",
@@ -70,8 +71,10 @@ function testCmdDeleteSameAsCmdBackspace() {
   });
   assert.ok(r);
   assert.strictEqual(r.action, "write");
-  assert.strictEqual(r.reason, "cmd-backspace-clear-line");
-  assert.strictEqual(r.sequence, SEQ_CLEAR_CURRENT_LINE);
+  assert.strictEqual(r.reason, "cmd-delete-delete-right");
+  // Ctrl+K — cursor to line end (Warp DeleteAllRight / macOS)
+  assert.strictEqual(r.sequence, SEQ_DELETE_ALL_RIGHT);
+  assert.strictEqual(r.sequence, "\x0b");
 }
 
 function testCmdBackspaceKeypressSwallows() {
@@ -82,6 +85,18 @@ function testCmdBackspaceKeypressSwallows() {
   });
   assert.ok(r);
   assert.strictEqual(r.action, "swallow");
+  assert.strictEqual(r.reason, "cmd-backspace-swallow");
+}
+
+function testCmdDeleteKeypressSwallows() {
+  const r = resolveGrokHostKey({
+    type: "keypress",
+    key: "Delete",
+    metaKey: true,
+  });
+  assert.ok(r);
+  assert.strictEqual(r.action, "swallow");
+  assert.strictEqual(r.reason, "cmd-delete-swallow");
 }
 
 function testCmdASelectAll() {
@@ -260,9 +275,10 @@ function run() {
     testPlainEnterPassthrough,
     testShiftEnterKeydownWritesEscCr,
     testShiftEnterKeypressSwallows,
-    testCmdBackspaceClearsCurrentLineOnly,
-    testCmdDeleteSameAsCmdBackspace,
+    testCmdBackspaceDeletesAllLeft,
+    testCmdDeleteDeletesAllRight,
     testCmdBackspaceKeypressSwallows,
+    testCmdDeleteKeypressSwallows,
     testCmdASelectAll,
     testCmdAUppercase,
     testCtrlEnterStillWorks,

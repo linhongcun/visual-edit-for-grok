@@ -2,6 +2,15 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.8.2] — 2026-07-12
+
+### Align Cmd+Backspace/Delete with Warp / macOS
+
+- **⌘⌫** → Ctrl+U: delete from cursor to **line start** (Warp `DeleteAllLeft`)
+- **⌘⌦** → Ctrl+K: delete from cursor to **line end** (Warp `DeleteAllRight`)
+- No longer clears whole buffer or whole line unconditionally
+- Unit tests for split sequences + swallow
+
 ## [0.8.1] — 2026-07-12
 
 ### Fix Cmd+Backspace/Delete: clear current line only
