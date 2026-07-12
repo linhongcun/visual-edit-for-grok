@@ -2,6 +2,15 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.7.9] — 2026-07-12
+
+### Cmd+Backspace / Cmd+Delete clears Grok prompt line
+
+- Map **⌘⌫** and **⌘⌦** to Kitty Super+A + DEL (select all + delete) so the whole composer line clears
+- Map **⌘A** to Kitty Super+A; stop Electron `role:selectAll` from stealing the chord
+- Advertise PTY as `TERM_PROGRAM=ghostty` so Grok enables its macOS Cmd+A select-all binding
+- Unit tests for the host key encoder
+
 ## [0.7.8] — 2026-07-12
 
 ### Fix Shift+Enter still submitting in Grok (keypress bare CR)

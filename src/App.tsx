@@ -504,6 +504,18 @@ export default function App() {
         setSettingsOpen(false);
         setPaletteOpen(false);
         break;
+      case "terminal-select-all": {
+        // Grok Cmd+A: Kitty Super+A (same as host key encoder)
+        const active = activeTermIdRef.current;
+        if (active && window.vefg) {
+          void window.vefg.terminalWrite({
+            data: "\x1b[97;9u",
+            sessionId: active,
+          });
+          focusGrokTerminal();
+        }
+        break;
+      }
       default:
         break;
     }
@@ -2990,6 +3002,8 @@ export default function App() {
                     ["⌘K · ↑↓ · Enter", "shortcuts.paletteNav"],
                     ["Enter · ⇧Enter", "shortcuts.urlEnter"],
                     ["⇧Enter · ⌥Enter", "shortcuts.grokNewline"],
+                    ["⌘⌫ / ⌘⌦", "shortcuts.grokClearLine"],
+                    ["⌘A", "shortcuts.grokSelectAll"],
                     ["⌘T / ⌘W", "shortcuts.tabs"],
                     ["⌘+ / ⌘- / ⌘0", "shortcuts.font"],
                     ["⌘1 / ⌘2", "shortcuts.focus"],

@@ -784,7 +784,13 @@ function installAppMenu() {
         { role: "cut" },
         { role: "copy" },
         { role: "paste" },
-        { role: "selectAll" },
+        // Do not use role:selectAll — Cmd+A must reach Grok prompt (select all
+        // in composer). We remap Super+A via the terminal host key encoder.
+        {
+          label: "Select All",
+          accelerator: "CommandOrControl+A",
+          click: () => emitMenuAction("terminal-select-all"),
+        },
         { type: "separator" },
         {
           label: "Find in Terminal",

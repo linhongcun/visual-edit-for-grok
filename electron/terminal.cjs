@@ -86,12 +86,25 @@ function buildColorfulEnv(base = process.env, size = {}) {
     env.LINES = String(Math.floor(rows));
   }
 
-  // Help TUI detectors that key off terminal identity (not Warp-specific)
-  if (!env.TERM_PROGRAM || env.TERM_PROGRAM === "Apple_Terminal") {
-    env.TERM_PROGRAM = "iTerm.app";
+  // Grok enables macOS Cmd+A (select all in prompt) only when it detects
+  // Ghostty. We are an Electron+xterm host that remaps Cmd chords into Kitty
+  // CSI-u sequences, so advertise as Ghostty so those bindings are live.
+  // (Plain Apple Terminal still gets overridden; do not force when already set
+  // to a non-Apple identity via the parent env for debugging.)
+  if (
+    !env.TERM_PROGRAM ||
+    env.TERM_PROGRAM === "Apple_Terminal" ||
+    env.TERM_PROGRAM === "iTerm.app" ||
+    env.TERM_PROGRAM === "vscode" ||
+    env.TERM_PROGRAM === "Electron"
+  ) {
+    env.TERM_PROGRAM = "ghostty";
   }
-  if (!env.TERM_PROGRAM_VERSION) {
-    env.TERM_PROGRAM_VERSION = "3.5.0";
+  if (
+    !env.TERM_PROGRAM_VERSION ||
+    env.TERM_PROGRAM === "ghostty"
+  ) {
+    env.TERM_PROGRAM_VERSION = env.TERM_PROGRAM_VERSION || "1.1.0";
   }
 
   return env;

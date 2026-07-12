@@ -17,7 +17,7 @@ import {
   TERM_FONT_SIZE_DEFAULT,
   TERM_SCROLLBACK_DEFAULT,
 } from "../term-settings.cjs";
-import { resolveModifiedEnterForGrok } from "../terminal-key-encode.cjs";
+import { resolveGrokHostKey } from "../terminal-key-encode.cjs";
 import "@xterm/xterm/css/xterm.css";
 
 /**
@@ -699,17 +699,16 @@ export default function TerminalPane({
     });
 
     /**
-     * Grok TUI: Shift+Enter = newline, Enter = send.
-     * Stock xterm.js encodes both as bare CR on keydown. We remap Shift+Enter
-     * to ESC+CR (same as Alt+Enter). Also swallow the following keypress/keyup
-     * — otherwise xterm still emits bare CR after our write and Grok submits
-     * (user: Alt+Enter works, Shift+Enter still sends).
+     * Grok host key remaps (xterm.js gaps):
+     * - Shift+Enter → ESC+CR newline (stock xterm sends bare CR)
+     * - Ctrl+Enter → Kitty CSI-u interject
+     * - Cmd+A → Kitty Super+A select-all (with TERM_PROGRAM=ghostty)
+     * - Cmd+Backspace/Delete → select-all + DEL (clear whole prompt line)
+     * Always swallow keypress/keyup after keydown write to avoid double chars.
      */
     term.attachCustomKeyEventHandler((ev) => {
-      const resolved = resolveModifiedEnterForGrok(ev);
+      const resolved = resolveGrokHostKey(ev);
       if (!resolved) return true;
-      // Always cancel DOM default for write *and* swallow — otherwise keypress
-      // still emits bare CR after a keydown remapping.
       try {
         ev.preventDefault?.();
         ev.stopPropagation?.();
@@ -722,7 +721,6 @@ export default function TerminalPane({
           sessionId: sessionIdRef.current,
         });
       }
-      // false = do not let xterm handle this event
       return false;
     });
 
