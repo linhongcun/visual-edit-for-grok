@@ -14,8 +14,13 @@ import { resolveTerminalLinkTarget } from "../link-open-policy.cjs";
 import {
   clampTermFontSize,
   clampTermScrollback,
+  clampMinimumContrastRatio,
+  planWebglContextLoss,
   TERM_FONT_SIZE_DEFAULT,
   TERM_SCROLLBACK_DEFAULT,
+  TERM_MIN_CONTRAST_DEFAULT,
+  WEBGL_CONTEXT_LOSS_MAX_RETRIES,
+  WEBGL_CONTEXT_LOSS_RETRY_DELAY_MS,
 } from "../term-settings.cjs";
 import { resolveGrokHostKey } from "../terminal-key-encode.cjs";
 import "@xterm/xterm/css/xterm.css";
@@ -354,6 +359,8 @@ export default function TerminalPane({
       scrollSensitivity: 3,
       fastScrollSensitivity: 8,
       smoothScrollDuration: 0,
+      // xterm accessibility: lift low-contrast ANSI (Grok muted TUI) to WCAG AA
+      minimumContrastRatio: clampMinimumContrastRatio(TERM_MIN_CONTRAST_DEFAULT),
       // Restored: reduces “broken” table border / CJK overlap artifacts
       rescaleOverlappingGlyphs: true,
       // OSC 8 hyperlinks (Grok writes these). Default = confirm() + window.open.
@@ -446,21 +453,43 @@ export default function TerminalPane({
       ),
     );
     term.open(hostRef.current);
-    // WebGL: cleaner box-drawing for Grok tables; fall back to canvas if GPU path fails.
-    // Trackpad scroll no longer depends on renderer (viewport.scrollTop path).
-    try {
-      const webgl = new WebglAddon();
-      webgl.onContextLoss(() => {
-        try {
-          webgl.dispose();
-        } catch {
-          /* ignore */
-        }
-      });
-      term.loadAddon(webgl);
-    } catch {
-      /* canvas renderer remains */
-    }
+    // WebGL: cleaner box-drawing for Grok tables. On context loss (sleep/OOM),
+    // xterm-recommended dispose → canvas; pure plan may re-attach once.
+    let webglLossCount = 0;
+    let webglRetryTimer: number | null = null;
+    let webglDisposed = false;
+
+    const attachWebglRenderer = () => {
+      if (webglDisposed || termRef.current !== term) return;
+      try {
+        const webgl = new WebglAddon();
+        webgl.onContextLoss(() => {
+          const plan = planWebglContextLoss({
+            lossCount: webglLossCount,
+            maxRetries: WEBGL_CONTEXT_LOSS_MAX_RETRIES,
+            retryDelayMs: WEBGL_CONTEXT_LOSS_RETRY_DELAY_MS,
+          });
+          webglLossCount = plan.nextLossCount;
+          try {
+            webgl.dispose();
+          } catch {
+            /* ignore */
+          }
+          if (plan.action !== "retry-webgl") return;
+          if (webglRetryTimer != null) {
+            window.clearTimeout(webglRetryTimer);
+          }
+          webglRetryTimer = window.setTimeout(() => {
+            webglRetryTimer = null;
+            attachWebglRenderer();
+          }, plan.retryDelayMs);
+        });
+        term.loadAddon(webgl);
+      } catch {
+        /* canvas renderer remains */
+      }
+    };
+    attachWebglRenderer();
     fit.fit();
 
     termRef.current = term;
@@ -760,6 +789,11 @@ export default function TerminalPane({
       searchRef.current = null;
       clearFocusTimer();
       clearResizeTimer();
+      webglDisposed = true;
+      if (webglRetryTimer != null) {
+        window.clearTimeout(webglRetryTimer);
+        webglRetryTimer = null;
+      }
       if (wheelFrameRafRef.current != null) {
         window.cancelAnimationFrame(wheelFrameRafRef.current);
         wheelFrameRafRef.current = null;

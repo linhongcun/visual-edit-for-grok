@@ -2,6 +2,15 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.8.14] — 2026-07-12
+
+### xterm.js-inspired WebGL recovery + contrast
+
+- WebGL context-loss plan: dispose dead addon, one delayed re-attach, then stay on canvas (`planWebglContextLoss`)
+- Default `minimumContrastRatio` 4.5 (WCAG AA) via `clampMinimumContrastRatio` for readable Grok TUI colors
+- Inventory: `docs/XTERM-INVENTORY.md`
+- Out of scope: image/ligatures/progress/attach addons, serialize product, source copy of xterm internals
+
 ## [0.8.13] — 2026-07-12
 
 ### Palot-inspired notification cooldown + inventory

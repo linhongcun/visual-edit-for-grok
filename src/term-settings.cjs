@@ -14,6 +14,18 @@ const TERM_SCROLLBACK_MAX = 50000;
 const TERM_SCROLLBACK_DEFAULT = 10000;
 
 /**
+ * xterm minimumContrastRatio: 1 = off, 4.5 = WCAG AA, 7 = AAA, max 21.
+ * Default AA helps Grok TUI muted colors stay readable without settings chrome.
+ */
+const TERM_MIN_CONTRAST_MIN = 1;
+const TERM_MIN_CONTRAST_MAX = 21;
+const TERM_MIN_CONTRAST_DEFAULT = 4.5;
+
+/** After WebGL context loss: how many re-attach attempts before staying on canvas. */
+const WEBGL_CONTEXT_LOSS_MAX_RETRIES = 1;
+const WEBGL_CONTEXT_LOSS_RETRY_DELAY_MS = 500;
+
+/**
  * @param {unknown} value
  * @param {number} [fallback]
  * @returns {number}
@@ -58,6 +70,77 @@ function asBoolean(value, fallback = false) {
   return fallback;
 }
 
+/**
+ * Clamp xterm `minimumContrastRatio` (1 disables, up to 21).
+ * @param {unknown} value
+ * @param {number} [fallback]
+ * @returns {number}
+ */
+function clampMinimumContrastRatio(
+  value,
+  fallback = TERM_MIN_CONTRAST_DEFAULT,
+) {
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  const clamped = Math.min(TERM_MIN_CONTRAST_MAX, Math.max(TERM_MIN_CONTRAST_MIN, n));
+  return Math.round(clamped * 10) / 10;
+}
+
+/**
+ * Plan reaction to WebGL context loss (xterm addon-webgl README).
+ * Always dispose the dead addon; optionally schedule one re-attach after sleep/OOM.
+ *
+ * @param {{
+ *   lossCount?: number,
+ *   maxRetries?: number,
+ *   retryDelayMs?: number,
+ * }} [input]
+ * @returns {{
+ *   action: "dispose-to-canvas" | "retry-webgl",
+ *   reason: string,
+ *   nextLossCount: number,
+ *   retryDelayMs: number,
+ * }}
+ */
+function planWebglContextLoss(input = {}) {
+  const maxRetries = Math.max(
+    0,
+    Math.min(
+      10,
+      Number.isFinite(Number(input.maxRetries))
+        ? Math.floor(Number(input.maxRetries))
+        : WEBGL_CONTEXT_LOSS_MAX_RETRIES,
+    ),
+  );
+  const lossCount = Math.max(0, Math.floor(Number(input.lossCount) || 0));
+  const nextLossCount = lossCount + 1;
+  const retryDelayMs = Math.max(
+    0,
+    Math.min(
+      60_000,
+      Number.isFinite(Number(input.retryDelayMs))
+        ? Math.round(Number(input.retryDelayMs))
+        : WEBGL_CONTEXT_LOSS_RETRY_DELAY_MS,
+    ),
+  );
+
+  if (lossCount >= maxRetries) {
+    return {
+      action: "dispose-to-canvas",
+      reason: "budget-exhausted",
+      nextLossCount,
+      retryDelayMs: 0,
+    };
+  }
+
+  return {
+    action: "retry-webgl",
+    reason: "retry-after-loss",
+    nextLossCount,
+    retryDelayMs,
+  };
+}
+
 module.exports = {
   TERM_FONT_SIZE_MIN,
   TERM_FONT_SIZE_MAX,
@@ -65,8 +148,15 @@ module.exports = {
   TERM_SCROLLBACK_MIN,
   TERM_SCROLLBACK_MAX,
   TERM_SCROLLBACK_DEFAULT,
+  TERM_MIN_CONTRAST_MIN,
+  TERM_MIN_CONTRAST_MAX,
+  TERM_MIN_CONTRAST_DEFAULT,
+  WEBGL_CONTEXT_LOSS_MAX_RETRIES,
+  WEBGL_CONTEXT_LOSS_RETRY_DELAY_MS,
   clampTermFontSize,
   nextTermFontSize,
   clampTermScrollback,
+  clampMinimumContrastRatio,
+  planWebglContextLoss,
   asBoolean,
 };
