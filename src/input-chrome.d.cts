@@ -45,3 +45,52 @@ export function resolveFocusedChromeEscape(
   | "none";
 
 export function normalizeUrlInputValue(value: unknown): string;
+
+export function normalizeKeyEvent(event: {
+  key?: string;
+  shiftKey?: boolean;
+  metaKey?: boolean;
+  ctrlKey?: boolean;
+  altKey?: boolean;
+} | null | undefined): {
+  key: string;
+  shiftKey: boolean;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  altKey: boolean;
+};
+
+export function resolveUrlKeyAction(event: {
+  key?: string;
+  shiftKey?: boolean;
+  metaKey?: boolean;
+  ctrlKey?: boolean;
+  altKey?: boolean;
+}): "submit" | "none";
+
+export function resolveFindKeyAction(event: {
+  key?: string;
+  shiftKey?: boolean;
+  metaKey?: boolean;
+  ctrlKey?: boolean;
+  altKey?: boolean;
+}): "find-next" | "find-prev" | "none";
+
+export function clampPaletteIndex(index: unknown, itemCount: unknown): number;
+
+export function movePaletteIndex(
+  index: unknown,
+  itemCount: unknown,
+  direction: "up" | "down",
+): number;
+
+export function resolvePaletteKeyAction(
+  event: {
+    key?: string;
+    shiftKey?: boolean;
+    metaKey?: boolean;
+    ctrlKey?: boolean;
+    altKey?: boolean;
+  },
+  state?: { index?: number; itemCount?: number },
+): { type: "none" | "move" | "run"; index?: number };

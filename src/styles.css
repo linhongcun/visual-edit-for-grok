@@ -1567,9 +1567,14 @@ code {
 }
 
 .palette-item:hover,
-.palette-item:focus-visible {
+.palette-item:focus-visible,
+.palette-item.is-active {
   background: var(--color-muted);
   outline: none;
+}
+
+.palette-item.is-active {
+  box-shadow: inset 2px 0 0 var(--color-accent);
 }
 
 .shortcuts-body .shortcut-row {

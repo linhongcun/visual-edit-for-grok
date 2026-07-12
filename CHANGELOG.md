@@ -2,6 +2,21 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.7.5] — 2026-07-12
+
+### Chrome input keyboard contracts (Warp-inspired)
+
+Per-surface Enter / Shift+Enter (and palette arrows) via pure `input-chrome` policy:
+
+| Surface | Enter | Shift+Enter | Arrows |
+|---------|-------|-------------|--------|
+| Preview URL | Submit navigation | No multi-line (ignored) | — |
+| Find | Next match | Previous match | — |
+| Palette | Run highlighted / first | No-op | ↑/↓ move highlight |
+
+- Grok TUI agent input unchanged (Warp newline lives in their editor, not our PTY host)
+- Unit tests for URL/find/palette key policy; smoke asserts chrome surfaces
+
 ## [0.7.4] — 2026-07-12
 
 ### Fix Esc priority: Aim cancel wins over chrome inputs

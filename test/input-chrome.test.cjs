@@ -11,6 +11,11 @@ const {
   resolveEscapeAction,
   resolveFocusedChromeEscape,
   normalizeUrlInputValue,
+  resolveUrlKeyAction,
+  resolveFindKeyAction,
+  clampPaletteIndex,
+  movePaletteIndex,
+  resolvePaletteKeyAction,
 } = require("../src/input-chrome.cjs");
 
 function testShouldShowUrlClear() {
@@ -124,6 +129,67 @@ function testFocusedChromeEscDefersToAim() {
   );
 }
 
+function testUrlEnterSubmitShiftEnterNone() {
+  assert.strictEqual(resolveUrlKeyAction({ key: "Enter" }), "submit");
+  assert.strictEqual(
+    resolveUrlKeyAction({ key: "Enter", shiftKey: true }),
+    "none",
+  );
+  assert.strictEqual(resolveUrlKeyAction({ key: "a" }), "none");
+  assert.strictEqual(
+    resolveUrlKeyAction({ key: "Enter", metaKey: true }),
+    "none",
+  );
+}
+
+function testFindEnterNextShiftPrev() {
+  assert.strictEqual(resolveFindKeyAction({ key: "Enter" }), "find-next");
+  assert.strictEqual(
+    resolveFindKeyAction({ key: "Enter", shiftKey: true }),
+    "find-prev",
+  );
+  assert.strictEqual(resolveFindKeyAction({ key: "Escape" }), "none");
+}
+
+function testPaletteArrowClampAndRun() {
+  assert.strictEqual(clampPaletteIndex(-1, 3), 0);
+  assert.strictEqual(clampPaletteIndex(99, 3), 2);
+  assert.strictEqual(clampPaletteIndex(1, 0), -1);
+  assert.strictEqual(movePaletteIndex(0, 3, "down"), 1);
+  assert.strictEqual(movePaletteIndex(2, 3, "down"), 0);
+  assert.strictEqual(movePaletteIndex(0, 3, "up"), 2);
+  assert.strictEqual(movePaletteIndex(-1, 3, "down"), 0);
+  assert.strictEqual(movePaletteIndex(-1, 3, "up"), 2);
+
+  assert.deepStrictEqual(
+    resolvePaletteKeyAction({ key: "ArrowDown" }, { index: 0, itemCount: 3 }),
+    { type: "move", index: 1 },
+  );
+  assert.deepStrictEqual(
+    resolvePaletteKeyAction({ key: "ArrowUp" }, { index: 0, itemCount: 3 }),
+    { type: "move", index: 2 },
+  );
+  assert.deepStrictEqual(
+    resolvePaletteKeyAction({ key: "Enter" }, { index: 1, itemCount: 3 }),
+    { type: "run", index: 1 },
+  );
+  assert.deepStrictEqual(
+    resolvePaletteKeyAction({ key: "Enter" }, { index: -1, itemCount: 3 }),
+    { type: "run", index: 0 },
+  );
+  assert.deepStrictEqual(
+    resolvePaletteKeyAction({ key: "Enter" }, { index: 0, itemCount: 0 }),
+    { type: "none" },
+  );
+  assert.deepStrictEqual(
+    resolvePaletteKeyAction(
+      { key: "Enter", shiftKey: true },
+      { index: 0, itemCount: 3 },
+    ),
+    { type: "none" },
+  );
+}
+
 function run() {
   const tests = [
     testShouldShowUrlClear,
@@ -136,6 +202,9 @@ function run() {
     testEscapeOrderFindThenPaletteThenUrl,
     testNormalizeUrlInputValue,
     testFocusedChromeEscDefersToAim,
+    testUrlEnterSubmitShiftEnterNone,
+    testFindEnterNextShiftPrev,
+    testPaletteArrowClampAndRun,
   ];
   let failed = 0;
   for (const t of tests) {

@@ -37,6 +37,9 @@ import {
   resolveEscapeAction,
   resolveFocusedChromeEscape,
   normalizeUrlInputValue,
+  resolveUrlKeyAction,
+  resolvePaletteKeyAction,
+  clampPaletteIndex,
 } from "./input-chrome.cjs";
 import type {
   CaptureResult,
@@ -267,6 +270,7 @@ export default function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState("");
+  const [paletteIndex, setPaletteIndex] = useState(0);
   const [urlFocused, setUrlFocused] = useState(false);
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
@@ -491,6 +495,7 @@ export default function App() {
       case "palette":
         setPaletteOpen(true);
         setPaletteQuery("");
+        setPaletteIndex(0);
         setSettingsOpen(false);
         setShortcutsOpen(false);
         break;
@@ -1666,6 +1671,112 @@ export default function App() {
     limit: 8,
   });
 
+  const paletteCommands = [
+    {
+      id: "find",
+      label: tr("palette.find"),
+      run: () => {
+        setPaletteOpen(false);
+        openFindBar();
+      },
+    },
+    {
+      id: "aim",
+      label: tr("palette.aim"),
+      run: () => {
+        setPaletteOpen(false);
+        void togglePickRef.current();
+      },
+    },
+    {
+      id: "frame",
+      label: tr("palette.frame"),
+      run: () => {
+        setPaletteOpen(false);
+        void onScreenshotRef.current();
+      },
+    },
+    {
+      id: "resend",
+      label: tr("palette.resend"),
+      run: () => {
+        setPaletteOpen(false);
+        void onResendRef.current();
+      },
+    },
+    {
+      id: "new-tab",
+      label: tr("palette.newTab"),
+      run: () => {
+        setPaletteOpen(false);
+        void onNewTerminal();
+      },
+    },
+    {
+      id: "settings",
+      label: tr("palette.settings"),
+      run: () => {
+        setPaletteOpen(false);
+        setSettingsOpen(true);
+      },
+    },
+    {
+      id: "shortcuts",
+      label: tr("palette.shortcuts"),
+      run: () => {
+        setPaletteOpen(false);
+        setShortcutsOpen(true);
+      },
+    },
+    {
+      id: "toggle-preview",
+      label: tr("palette.togglePreview"),
+      run: () => {
+        setPaletteOpen(false);
+        void applyPreviewCollapsed(!previewCollapsedRef.current);
+      },
+    },
+  ];
+  const paletteVisible = filterPaletteItems(paletteQuery, paletteCommands);
+  const paletteHighlight = clampPaletteIndex(
+    paletteIndex,
+    paletteVisible.length,
+  );
+
+  function onPaletteKeyDown(e: ReactKeyboardEvent<HTMLElement>) {
+    if (e.key === "Escape") {
+      const action = resolveFocusedChromeEscape(
+        "palette",
+        pickModeRef.current,
+      );
+      e.preventDefault();
+      e.stopPropagation();
+      if (action === "aim-cancel") {
+        void window.vefg?.setPickMode(false);
+        return;
+      }
+      setPaletteOpen(false);
+      focusGrokTerminal();
+      return;
+    }
+    const action = resolvePaletteKeyAction(e, {
+      index: paletteHighlight,
+      itemCount: paletteVisible.length,
+    });
+    if (action.type === "move" && typeof action.index === "number") {
+      e.preventDefault();
+      setPaletteIndex(action.index);
+      return;
+    }
+    if (action.type === "run" && typeof action.index === "number") {
+      e.preventDefault();
+      const item = paletteVisible[action.index];
+      if (!item) return;
+      const full = paletteCommands.find((c) => c.id === item.id);
+      full?.run();
+    }
+  }
+
   const urlNavForm = (
     <form
       className={`url-form chrome-field ${preview.loading ? "loading" : ""} ${urlFocused ? "is-focused" : ""}`}
@@ -1714,20 +1825,31 @@ export default function App() {
         onFocus={() => setUrlFocused(true)}
         onBlur={() => setUrlFocused(false)}
         onKeyDown={(e) => {
-          if (e.key !== "Escape") return;
-          // Aim pickMode always wins over URL blur (do not swallow Esc).
-          const action = resolveFocusedChromeEscape(
-            "url",
-            pickModeRef.current,
-          );
-          e.preventDefault();
-          e.stopPropagation();
-          if (action === "aim-cancel") {
-            void window.vefg?.setPickMode(false);
+          if (e.key === "Escape") {
+            // Aim pickMode always wins over URL blur (do not swallow Esc).
+            const action = resolveFocusedChromeEscape(
+              "url",
+              pickModeRef.current,
+            );
+            e.preventDefault();
+            e.stopPropagation();
+            if (action === "aim-cancel") {
+              void window.vefg?.setPickMode(false);
+              return;
+            }
+            (e.target as HTMLInputElement).blur();
+            focusGrokTerminal();
             return;
           }
-          (e.target as HTMLInputElement).blur();
-          focusGrokTerminal();
+          // Enter submits; Shift+Enter does not invent multi-line URLs.
+          const urlAction = resolveUrlKeyAction(e);
+          if (urlAction === "submit") {
+            // Allow form onSubmit to run (do not preventDefault).
+            return;
+          }
+          if (e.key === "Enter" && e.shiftKey) {
+            e.preventDefault();
+          }
         }}
         placeholder={tr("nav.urlPlaceholder")}
         spellCheck={false}
@@ -2754,21 +2876,7 @@ export default function App() {
             role="dialog"
             aria-label={tr("palette.title")}
             onClick={(e) => e.stopPropagation()}
-            onKeyDown={(e) => {
-              if (e.key !== "Escape") return;
-              const action = resolveFocusedChromeEscape(
-                "palette",
-                pickModeRef.current,
-              );
-              e.preventDefault();
-              e.stopPropagation();
-              if (action === "aim-cancel") {
-                void window.vefg?.setPickMode(false);
-                return;
-              }
-              setPaletteOpen(false);
-              focusGrokTerminal();
-            }}
+            onKeyDown={onPaletteKeyDown}
           >
             <div className="palette-input-row chrome-field is-focused">
               <input
@@ -2776,26 +2884,21 @@ export default function App() {
                 autoFocus
                 value={paletteQuery}
                 placeholder={tr("palette.placeholder")}
-                onChange={(e) => setPaletteQuery(e.target.value)}
+                onChange={(e) => {
+                  setPaletteQuery(e.target.value);
+                  setPaletteIndex(0);
+                }}
                 spellCheck={false}
                 autoComplete="off"
                 aria-label={tr("palette.placeholder")}
+                aria-controls="palette-listbox"
+                aria-activedescendant={
+                  paletteHighlight >= 0 && paletteVisible[paletteHighlight]
+                    ? `palette-opt-${paletteVisible[paletteHighlight].id}`
+                    : undefined
+                }
                 enterKeyHint="go"
-                onKeyDown={(e) => {
-                  if (e.key !== "Escape") return;
-                  const action = resolveFocusedChromeEscape(
-                    "palette",
-                    pickModeRef.current,
-                  );
-                  e.preventDefault();
-                  e.stopPropagation();
-                  if (action === "aim-cancel") {
-                    void window.vefg?.setPickMode(false);
-                    return;
-                  }
-                  setPaletteOpen(false);
-                  focusGrokTerminal();
-                }}
+                onKeyDown={onPaletteKeyDown}
               />
               {shouldShowUrlClear(paletteQuery) ? (
                 <button
@@ -2803,104 +2906,49 @@ export default function App() {
                   className="icon-btn url-clear-btn"
                   title={tr("nav.urlClear")}
                   aria-label={tr("palette.clearAria")}
-                  onClick={() => setPaletteQuery("")}
+                  onClick={() => {
+                    setPaletteQuery("");
+                    setPaletteIndex(0);
+                  }}
                 >
                   ×
                 </button>
               ) : null}
             </div>
-            <ul className="palette-list" role="listbox" aria-label={tr("palette.title")}>
-              {(() => {
-                const commands = [
-                  {
-                    id: "find",
-                    label: tr("palette.find"),
-                    run: () => {
-                      setPaletteOpen(false);
-                      openFindBar();
-                    },
-                  },
-                  {
-                    id: "aim",
-                    label: tr("palette.aim"),
-                    run: () => {
-                      setPaletteOpen(false);
-                      void togglePickRef.current();
-                    },
-                  },
-                  {
-                    id: "frame",
-                    label: tr("palette.frame"),
-                    run: () => {
-                      setPaletteOpen(false);
-                      void onScreenshotRef.current();
-                    },
-                  },
-                  {
-                    id: "resend",
-                    label: tr("palette.resend"),
-                    run: () => {
-                      setPaletteOpen(false);
-                      void onResendRef.current();
-                    },
-                  },
-                  {
-                    id: "new-tab",
-                    label: tr("palette.newTab"),
-                    run: () => {
-                      setPaletteOpen(false);
-                      void onNewTerminal();
-                    },
-                  },
-                  {
-                    id: "settings",
-                    label: tr("palette.settings"),
-                    run: () => {
-                      setPaletteOpen(false);
-                      setSettingsOpen(true);
-                    },
-                  },
-                  {
-                    id: "shortcuts",
-                    label: tr("palette.shortcuts"),
-                    run: () => {
-                      setPaletteOpen(false);
-                      setShortcutsOpen(true);
-                    },
-                  },
-                  {
-                    id: "toggle-preview",
-                    label: tr("palette.togglePreview"),
-                    run: () => {
-                      setPaletteOpen(false);
-                      void applyPreviewCollapsed(!previewCollapsedRef.current);
-                    },
-                  },
-                ];
-                const visible = filterPaletteItems(paletteQuery, commands);
-                if (visible.length === 0) {
-                  return (
-                    <li className="palette-empty" role="option" aria-disabled>
-                      {tr("palette.noResults")}
-                    </li>
-                  );
-                }
-                return visible.map((item) => {
-                  const full = commands.find((c) => c.id === item.id);
+            <ul
+              id="palette-listbox"
+              className="palette-list"
+              role="listbox"
+              aria-label={tr("palette.title")}
+            >
+              {paletteVisible.length === 0 ? (
+                <li className="palette-empty" role="option" aria-disabled>
+                  {tr("palette.noResults")}
+                </li>
+              ) : (
+                paletteVisible.map((item, index) => {
+                  const full = paletteCommands.find((c) => c.id === item.id);
                   if (!full) return null;
+                  const selected = index === paletteHighlight;
                   return (
-                    <li key={item.id} role="option">
+                    <li
+                      key={item.id}
+                      id={`palette-opt-${item.id}`}
+                      role="option"
+                      aria-selected={selected}
+                    >
                       <button
                         type="button"
-                        className="palette-item"
+                        className={`palette-item ${selected ? "is-active" : ""}`}
                         onClick={() => full.run()}
+                        onMouseEnter={() => setPaletteIndex(index)}
                       >
                         {item.label}
                       </button>
                     </li>
                   );
-                });
-              })()}
+                })
+              )}
             </ul>
           </div>
         </div>
@@ -2933,7 +2981,9 @@ export default function App() {
                 {(
                   [
                     ["⌘F", "shortcuts.find"],
-                    ["⌘G / ⇧⌘G", "shortcuts.findNav"],
+                    ["Enter / ⇧Enter", "shortcuts.findNav"],
+                    ["⌘K · ↑↓ · Enter", "shortcuts.paletteNav"],
+                    ["Enter · ⇧Enter", "shortcuts.urlEnter"],
                     ["⌘T / ⌘W", "shortcuts.tabs"],
                     ["⌘+ / ⌘- / ⌘0", "shortcuts.font"],
                     ["⌘1 / ⌘2", "shortcuts.focus"],

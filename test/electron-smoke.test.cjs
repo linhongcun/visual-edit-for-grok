@@ -476,6 +476,15 @@ async function run() {
     );
     console.log("ok  - URL chrome clear + placeholder");
 
+    // Keyboard contract is pure policy + source wiring (unit + structural).
+    // Smoke only asserts palette/find/URL surfaces still mount after polish.
+    const keySurfaces = await shellClient.evaluate(`(() => ({
+      url: Boolean(document.querySelector('#preview-url-input, .url-input')),
+      hasUrlForm: Boolean(document.querySelector('.url-form')),
+    }))()`);
+    assert.ok(keySurfaces.url && keySurfaces.hasUrlForm, "URL keyboard surface missing");
+    console.log("ok  - input keyboard surfaces present");
+
     const welcomeClient = await connectTarget(
       debuggingPort,
       (target) => {

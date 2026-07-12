@@ -144,6 +144,122 @@ function resolveFocusedChromeEscape(surface, pickMode = false) {
   });
 }
 
+/**
+ * Normalize a keyboard event-like object for pure policy helpers.
+ * @param {{ key?: string, shiftKey?: boolean, metaKey?: boolean, ctrlKey?: boolean, altKey?: boolean } | null | undefined} event
+ * @returns {{ key: string, shiftKey: boolean, metaKey: boolean, ctrlKey: boolean, altKey: boolean }}
+ */
+function normalizeKeyEvent(event) {
+  const e = event && typeof event === "object" ? event : {};
+  return {
+    key: String(e.key || ""),
+    shiftKey: Boolean(e.shiftKey),
+    metaKey: Boolean(e.metaKey),
+    ctrlKey: Boolean(e.ctrlKey),
+    altKey: Boolean(e.altKey),
+  };
+}
+
+/**
+ * Preview URL field keyboard contract (single-line address bar).
+ * - Enter → submit navigation
+ * - Shift+Enter → none (do not invent multi-line URLs; Warp newline is for multiline editors)
+ *
+ * @param {{ key?: string, shiftKey?: boolean }} event
+ * @returns {"submit"|"none"}
+ */
+function resolveUrlKeyAction(event) {
+  const { key, shiftKey, metaKey, ctrlKey, altKey } = normalizeKeyEvent(event);
+  if (metaKey || ctrlKey || altKey) return "none";
+  if (key !== "Enter") return "none";
+  if (shiftKey) return "none";
+  return "submit";
+}
+
+/**
+ * Find-in-terminal keyboard contract (search navigation, not multiline insert).
+ * - Enter → next match
+ * - Shift+Enter → previous match
+ * (Warp Shift+Enter newline maps here to “secondary direction”, not a newline.)
+ *
+ * @param {{ key?: string, shiftKey?: boolean }} event
+ * @returns {"find-next"|"find-prev"|"none"}
+ */
+function resolveFindKeyAction(event) {
+  const { key, shiftKey, metaKey, ctrlKey, altKey } = normalizeKeyEvent(event);
+  if (metaKey || ctrlKey || altKey) return "none";
+  if (key !== "Enter") return "none";
+  return shiftKey ? "find-prev" : "find-next";
+}
+
+/**
+ * Clamp palette highlight index into [0, itemCount) or -1 when empty.
+ * @param {unknown} index
+ * @param {unknown} itemCount
+ * @returns {number}
+ */
+function clampPaletteIndex(index, itemCount) {
+  const n = Math.max(0, Math.floor(Number(itemCount) || 0));
+  if (n <= 0) return -1;
+  let i = Math.floor(Number(index));
+  if (!Number.isFinite(i)) i = 0;
+  if (i < 0) return 0;
+  if (i >= n) return n - 1;
+  return i;
+}
+
+/**
+ * Move palette highlight.
+ * @param {unknown} index current highlight (-1 or 0..n-1)
+ * @param {unknown} itemCount
+ * @param {"up"|"down"} direction
+ * @returns {number}
+ */
+function movePaletteIndex(index, itemCount, direction) {
+  const n = Math.max(0, Math.floor(Number(itemCount) || 0));
+  if (n <= 0) return -1;
+  let i = Math.floor(Number(index));
+  if (!Number.isFinite(i) || i < 0) {
+    // From no selection: down → 0, up → last
+    return direction === "up" ? n - 1 : 0;
+  }
+  if (direction === "up") return i <= 0 ? n - 1 : i - 1;
+  return i >= n - 1 ? 0 : i + 1;
+}
+
+/**
+ * Command palette keyboard contract.
+ * - ArrowUp/Down → move highlight (wrap)
+ * - Enter → run highlighted item (or first if none and list non-empty)
+ * - Shift+Enter → none (no multiline; list accept is plain Enter)
+ *
+ * @param {{ key?: string, shiftKey?: boolean, metaKey?: boolean, ctrlKey?: boolean, altKey?: boolean }} event
+ * @param {{ index?: number, itemCount?: number }} [state]
+ * @returns {{ type: "none"|"move"|"run", index?: number }}
+ */
+function resolvePaletteKeyAction(event, state = {}) {
+  const { key, shiftKey, metaKey, ctrlKey, altKey } = normalizeKeyEvent(event);
+  if (metaKey || ctrlKey || altKey) return { type: "none" };
+  const count = Math.max(0, Math.floor(Number(state.itemCount) || 0));
+  const index = clampPaletteIndex(state.index, count);
+
+  if (key === "ArrowDown") {
+    if (count <= 0) return { type: "none" };
+    return { type: "move", index: movePaletteIndex(index, count, "down") };
+  }
+  if (key === "ArrowUp") {
+    if (count <= 0) return { type: "none" };
+    return { type: "move", index: movePaletteIndex(index, count, "up") };
+  }
+  if (key === "Enter") {
+    if (shiftKey) return { type: "none" };
+    if (count <= 0) return { type: "none" };
+    const runIndex = index >= 0 ? index : 0;
+    return { type: "run", index: clampPaletteIndex(runIndex, count) };
+  }
+  return { type: "none" };
+}
+
 module.exports = {
   shouldShowUrlClear,
   filterRecentUrls,
@@ -152,4 +268,10 @@ module.exports = {
   resolveEscapeAction,
   resolveFocusedChromeEscape,
   normalizeUrlInputValue,
+  normalizeKeyEvent,
+  resolveUrlKeyAction,
+  resolveFindKeyAction,
+  clampPaletteIndex,
+  movePaletteIndex,
+  resolvePaletteKeyAction,
 };

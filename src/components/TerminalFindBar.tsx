@@ -1,5 +1,8 @@
 import { useEffect, useRef } from "react";
-import { resolveFocusedChromeEscape } from "../input-chrome.cjs";
+import {
+  resolveFocusedChromeEscape,
+  resolveFindKeyAction,
+} from "../input-chrome.cjs";
 
 export interface TerminalFindBarProps {
   open: boolean;
@@ -86,10 +89,15 @@ export default function TerminalFindBar({
           onClose();
           return;
         }
-        if (e.key === "Enter") {
+        const findAction = resolveFindKeyAction(e);
+        if (findAction === "find-next") {
           e.preventDefault();
-          if (e.shiftKey) onFindPrevious();
-          else onFindNext();
+          onFindNext();
+          return;
+        }
+        if (findAction === "find-prev") {
+          e.preventDefault();
+          onFindPrevious();
         }
       }}
     >

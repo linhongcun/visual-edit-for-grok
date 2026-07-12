@@ -83,3 +83,15 @@ Warp-quality editing is mostly their **owned command editor**. We polish **app c
 | Palette | Filter helper, empty state, Esc→terminal |
 
 Helpers: `src/input-chrome.cjs` (pure). Grok TUI prompt is unchanged.
+
+## Keyboard contracts (v0.7.5)
+
+Warp maps **Shift+Enter → newline** in its multiline command editor. Our agent compose is **Grok TUI**, so chrome maps:
+
+| Surface | Enter | Shift+Enter |
+|---------|-------|-------------|
+| URL | Go | ignore (single-line) |
+| Find | next | previous |
+| Palette | run selection | ignore |
+
+Arrows on palette move the highlight. Policy: `resolveUrlKeyAction` / `resolveFindKeyAction` / `resolvePaletteKeyAction`.
