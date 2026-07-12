@@ -142,6 +142,25 @@ export interface VefgApi {
     notifyOnGrokExit: boolean;
   }>;
   copyDiagnostics: () => Promise<{ ok: boolean }>;
+  stabilityProbe: (payload?: {
+    code?: string;
+    message?: string;
+  }) => Promise<{
+    ok: boolean;
+    entry?: {
+      code: string;
+      message: string;
+      severity?: string;
+      at?: number;
+    } | null;
+    recentErrors?: Array<{
+      code: string;
+      message: string;
+      at?: number;
+      severity?: string;
+    }>;
+    bufferSize?: number;
+  }>;
   checkUpdates: () => Promise<{ ok: boolean }>;
   openExternal: (url: string) => Promise<{ ok: boolean }>;
   pickProjectDir: () => Promise<{

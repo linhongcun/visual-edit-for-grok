@@ -2,6 +2,17 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.7.2] — 2026-07-12
+
+### Production stability (Warp-inspired local bar)
+
+- Pure `electron/stability.cjs`: classify expected vs actionable faults, privacy-safe ring buffer, once-per-run throttle
+- Main process `uncaughtException` / `unhandledRejection` handlers buffer scrubbed errors without killing the app
+- Settings write failures soft-degrade (prior good file kept); PTY exit handlers cannot throw through the event loop
+- Diagnostics copy includes the recent-error buffer; `app:stability-probe` for smoke soft-fault injection
+- Packaging require-path guard scans `electron/*.cjs` for forbidden `../src/` requires (prevents 0.7.1-class ship bugs)
+- Electron smoke asserts soft probe scrubs secrets and leaves workbench chrome alive
+
 ## [0.7.1] — 2026-07-12
 
 ### Fix packaged app crash: missing term-settings module

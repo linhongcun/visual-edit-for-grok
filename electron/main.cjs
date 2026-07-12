@@ -69,6 +69,12 @@ const {
 } = require("./privacy-policy.cjs");
 const { formatDiagnosticSummary } = require("./diagnostics.cjs");
 const {
+  StabilityErrorBuffer,
+  createOncePerRun,
+  reportStabilityFault,
+  classifyStabilityError,
+} = require("./stability.cjs");
+const {
   buildPasteStatus,
   classifyDeliveryOutcome,
   deliveryOutcomeLabel,
@@ -78,6 +84,74 @@ const {
   buildActionableError,
   shouldConfirmQuit,
 } = require("./operator-guidance.cjs");
+
+/** Privacy-safe recent errors for diagnostics (Warp-inspired local ring buffer). */
+const stabilityBuffer = new StabilityErrorBuffer({ maxSize: 30 });
+const stabilityOnce = createOncePerRun();
+
+/**
+ * Report a main-process fault without crashing the event loop.
+ * @param {{ code?: string, message?: string, error?: unknown, source?: string }} input
+ * @param {{ throttle?: boolean, throttleKey?: string }} [opts]
+ */
+function reportMainFault(input, opts = {}) {
+  try {
+    const entry = reportStabilityFault(
+      stabilityBuffer,
+      input,
+      opts.throttle === false
+        ? {}
+        : { once: stabilityOnce, throttleKey: opts.throttleKey },
+    );
+    if (entry && entry.severity === "actionable") {
+      console.error(
+        `[stability] ${entry.code}: ${entry.message}${entry.source ? ` (${entry.source})` : ""}`,
+      );
+    } else if (entry && process.env.VEFG_DEV === "1") {
+      console.warn(
+        `[stability] ${entry.severity} ${entry.code}: ${entry.message}`,
+      );
+    }
+    return entry;
+  } catch (err) {
+    console.error("[stability] reportMainFault failed:", err);
+    return null;
+  }
+}
+
+function installProcessStabilityHandlers() {
+  process.on("uncaughtException", (err) => {
+    reportMainFault(
+      {
+        code: "uncaughtException",
+        message: err instanceof Error ? err.message : String(err),
+        error: err,
+        source: "process",
+      },
+      { throttle: false },
+    );
+    // Do not rethrow — keep window usable; user can copy diagnostics.
+  });
+  process.on("unhandledRejection", (reason) => {
+    const message =
+      reason instanceof Error
+        ? reason.message
+        : typeof reason === "string"
+          ? reason
+          : String(reason);
+    reportMainFault(
+      {
+        code: "unhandledRejection",
+        message,
+        error: reason instanceof Error ? reason : undefined,
+        source: "process",
+      },
+      { throttle: false },
+    );
+  });
+}
+
+installProcessStabilityHandlers();
 const {
   canStartCapture,
   shouldRunCleanup,
@@ -108,7 +182,7 @@ function settingsFile() {
   }
 }
 
-/** Immediate settings write (URL, cwd, final split flush). */
+/** Immediate settings write (URL, cwd, final split flush). Soft-fails into buffer. */
 function persist(partial) {
   try {
     const next = saveSettings(settingsFile(), partial);
@@ -116,7 +190,16 @@ function persist(partial) {
     settingsDirty = false;
     return next;
   } catch (err) {
-    console.warn("persist settings failed:", err);
+    reportMainFault(
+      {
+        code: "settings-write",
+        message: err instanceof Error ? err.message : String(err),
+        error: err instanceof Error ? err : undefined,
+        source: "settings-store",
+      },
+      { throttleKey: "settings-write" },
+    );
+    // Prior good settings remain on disk (atomic rename path never half-wrote).
     return null;
   }
 }
@@ -2727,17 +2810,28 @@ function createTerminalSlot(opts = {}) {
     onData: (data) =>
       sendToRenderer("terminal:data", { sessionId: meta.id, data }),
     onExit: (code, _signal, mode) => {
-      sendToRenderer("terminal:exit", {
-        sessionId: meta.id,
-        code,
-        mode,
-      });
-      emitTerminalStatus(
-        terminalSlots.get(meta.id),
-        { alive: false, shellAlive: false, reason: "exit" },
-      );
-      // Warp-inspired: notify when Grok/session exits while window is in background
+      // Soft-degrade: never throw; mark tab dead and buffer non-zero exits as info/expected.
       try {
+        sendToRenderer("terminal:exit", {
+          sessionId: meta.id,
+          code,
+          mode,
+        });
+        emitTerminalStatus(
+          terminalSlots.get(meta.id),
+          { alive: false, shellAlive: false, reason: "exit" },
+        );
+        if (code !== 0 && code != null) {
+          reportMainFault(
+            {
+              code: "pty-exit",
+              message: `session exited with code ${code}`,
+              source: "terminal",
+            },
+            { throttleKey: `pty-exit:${meta.id}:${code}` },
+          );
+        }
+        // Warp-inspired: notify when Grok/session exits while window is in background
         if (
           notifyOnGrokExit &&
           Notification.isSupported() &&
@@ -2754,8 +2848,16 @@ function createTerminalSlot(opts = {}) {
             }),
           }).show();
         }
-      } catch {
-        /* ignore notification failures */
+      } catch (err) {
+        reportMainFault(
+          {
+            code: "pty-exit-handler",
+            message: err instanceof Error ? err.message : String(err),
+            error: err instanceof Error ? err : undefined,
+            source: "terminal",
+          },
+          { throttle: false },
+        );
       }
     },
   });
@@ -3134,6 +3236,21 @@ function registerIpc() {
 
   ipcMain.handle("app:copy-diagnostics", async () => {
     const bin = await grokBinaryExists();
+    const recentErrors = stabilityBuffer.list(10).map((e) => ({
+      code: e.code,
+      message: e.message,
+      at: e.at,
+      severity: e.severity,
+      count: e.count,
+    }));
+    if (previewError) {
+      recentErrors.push({
+        code: "preview-load",
+        message: previewError,
+        at: Date.now(),
+        severity: "expected",
+      });
+    }
     const text = formatDiagnosticSummary({
       appVersion: app.getVersion(),
       grokBinaryFound: bin.ok,
@@ -3148,12 +3265,38 @@ function registerIpc() {
       })),
       settingsDir: path.dirname(settingsFile()),
       captureDir: CAPTURE_DIR,
-      recentErrors: previewError
-        ? [{ code: "preview-load", message: previewError, at: Date.now() }]
-        : [],
+      recentErrors,
     });
     clipboard.writeText(text);
     return { ok: true };
+  });
+
+  /**
+   * Smoke / operator probe: inject a soft expected fault without crashing.
+   * Always records a scrubbed buffer entry and returns buffer snapshot.
+   */
+  ipcMain.handle("app:stability-probe", async (_e, payload = {}) => {
+    const message =
+      typeof payload?.message === "string" && payload.message.trim()
+        ? payload.message.trim()
+        : "stability probe: soft expected fault (token=should-redact secret=x)";
+    const entry = reportMainFault(
+      {
+        code:
+          typeof payload?.code === "string" && payload.code.trim()
+            ? payload.code.trim()
+            : "stability-probe",
+        message,
+        source: "stability-probe",
+      },
+      { throttle: false },
+    );
+    return {
+      ok: true,
+      entry,
+      recentErrors: stabilityBuffer.list(10),
+      bufferSize: stabilityBuffer.size(),
+    };
   });
 
   ipcMain.handle("app:check-updates", async () => {

@@ -58,3 +58,16 @@ Visual Capture for Grok is **not** a Warp clone. We host the **native Grok TUI**
 ## License note
 
 Do **not** copy code from the Warp repository (AGPL). Reimplement against xterm.js public APIs and our Electron shell.
+
+## Production stability (v0.7.2)
+
+Local production bar (not a Sentry/minidump clone):
+
+| Mechanism | Module |
+|-----------|--------|
+| Expected vs actionable classify | `electron/stability.cjs` |
+| Privacy-safe recent-error ring | `StabilityErrorBuffer` → diagnostics |
+| Uncaught / unhandled hooks | `electron/main.cjs` `installProcessStabilityHandlers` |
+| Soft settings / PTY sinks | `persist()`, terminal `onExit` |
+| Packaging require guard | `test/stability.test.cjs` scans `electron/*.cjs` |
+| Smoke soft-fault probe | `window.vefg.stabilityProbe` |

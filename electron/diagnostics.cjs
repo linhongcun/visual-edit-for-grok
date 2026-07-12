@@ -57,6 +57,13 @@ function buildDiagnosticSummary(input = {}) {
       code: String(entry.code || "unknown").slice(0, 80),
       message: sanitizeErrorText(entry.message),
       at: Number(entry.at) || 0,
+      severity: entry.severity
+        ? String(entry.severity).slice(0, 20)
+        : undefined,
+      count:
+        typeof entry.count === "number" && Number.isFinite(entry.count)
+          ? entry.count
+          : undefined,
     })),
   };
 }

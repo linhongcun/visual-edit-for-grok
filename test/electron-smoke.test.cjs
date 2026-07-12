@@ -340,6 +340,36 @@ async function run() {
     })()`);
     assert.match(unsafeLinkResult, /Only http\(s\) links/);
 
+    // Stability: soft main-side fault probe must scrub secrets and not kill the process.
+    const stabilityProbe = await shellClient.evaluate(`(async () => {
+      if (!window.vefg?.stabilityProbe) return { missing: true };
+      return window.vefg.stabilityProbe({
+        code: "stability-probe",
+        message: "smoke soft fault token=supersecret99 https://evil.example/?api_key=xyz",
+      });
+    })()`);
+    assert.notStrictEqual(stabilityProbe.missing, true, "stabilityProbe API missing");
+    assert.strictEqual(stabilityProbe.ok, true);
+    assert.ok(stabilityProbe.bufferSize >= 1, "stability buffer empty after probe");
+    const probeJson = JSON.stringify(stabilityProbe);
+    assert.doesNotMatch(probeJson, /supersecret99|api_key=xyz/);
+    assert.match(
+      String(stabilityProbe.entry?.message || ""),
+      /smoke soft fault|REDACTED/i,
+    );
+    // Workbench still alive after soft fault
+    const afterProbe = await shellClient.evaluate(
+      `(async () => window.vefg ? window.vefg.getState() : null)()`,
+    );
+    assert.ok(afterProbe && typeof afterProbe.splitRatio === "number");
+    assert.ok(
+      await shellClient.evaluate(
+        `Boolean(document.querySelector('.btn-pick') && document.querySelector('.url-input'))`,
+      ),
+      "workbench chrome missing after soft stability probe",
+    );
+    console.log("ok  - stability soft-error probe (scrubbed, no crash)");
+
     const initialSplitter = await shellClient.evaluate(`(() => {
       const splitter = document.querySelector('[role="separator"]');
       return splitter ? {

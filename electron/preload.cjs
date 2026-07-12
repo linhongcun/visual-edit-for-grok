@@ -31,6 +31,8 @@ contextBridge.exposeInMainWorld("vefg", {
   setTermSettings: (partial) =>
     ipcRenderer.invoke("app:set-term-settings", partial || {}),
   copyDiagnostics: () => ipcRenderer.invoke("app:copy-diagnostics"),
+  stabilityProbe: (payload) =>
+    ipcRenderer.invoke("app:stability-probe", payload || {}),
   checkUpdates: () => ipcRenderer.invoke("app:check-updates"),
   openExternal: (url) => ipcRenderer.invoke("shell:open-external", url),
 

@@ -170,12 +170,17 @@ function loadSettings(filePath) {
  * @param {Partial<{ settingsVersion: number, previewUrl: string, projectCwd: string, splitRatio: number, locale: string, previewCollapsed: boolean, recentPreviewUrls: string[], recentProjectCwds: string[] }>} partial
  * @returns {{ settingsVersion: number, previewUrl: string, projectCwd: string, splitRatio: number, locale: string, previewCollapsed: boolean, recentPreviewUrls: string[], recentProjectCwds: string[] }}
  */
+/**
+ * Atomic settings write. On failure throws after cleaning temp — caller (main
+ * persist) must catch and leave the previous good file intact.
+ */
 function saveSettings(filePath, partial = {}) {
   const prev = loadSettings(filePath);
   const next = normalizeSettings({ ...prev, ...partial });
   const dir = path.dirname(filePath);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  let renamed = false;
   try {
     fs.writeFileSync(tempPath, JSON.stringify(next, null, 2), {
       encoding: "utf8",
@@ -183,12 +188,23 @@ function saveSettings(filePath, partial = {}) {
       mode: 0o600,
     });
     fs.renameSync(tempPath, filePath);
+    renamed = true;
     fs.chmodSync(filePath, 0o600);
-  } finally {
+  } catch (err) {
+    // Ensure temp is removed so a half-written file never replaces good settings.
     try {
-      fs.unlinkSync(tempPath);
+      if (!renamed && fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
     } catch {
-      // Rename succeeded or no temporary file was created.
+      /* ignore */
+    }
+    throw err;
+  } finally {
+    if (!renamed) {
+      try {
+        fs.unlinkSync(tempPath);
+      } catch {
+        // Rename succeeded or no temporary file was created.
+      }
     }
   }
   return next;

@@ -237,6 +237,34 @@ function testDefaultPath() {
   assert.ok(p.startsWith("/tmp/userdata"));
 }
 
+function testFailedSaveLeavesPreviousFileIntact() {
+  const file = tmpFile();
+  try {
+    saveSettings(file, { projectCwd: "/tmp/good", locale: "en" });
+    const before = fs.readFileSync(file, "utf8");
+    // Make the path a directory so rename/write into the file path fails.
+    const blocked = `${file}.blocked`;
+    fs.mkdirSync(blocked);
+    let threw = false;
+    try {
+      saveSettings(blocked, { projectCwd: "/tmp/bad" });
+    } catch {
+      threw = true;
+    }
+    assert.strictEqual(threw, true);
+    // Original good file untouched
+    assert.strictEqual(fs.readFileSync(file, "utf8"), before);
+    assert.strictEqual(loadSettings(file).projectCwd, "/tmp/good");
+    fs.rmSync(blocked, { recursive: true, force: true });
+  } finally {
+    try {
+      fs.unlinkSync(file);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 function testTermHostSettingsNormalize() {
   assert.strictEqual(DEFAULTS.termFontSize, 12);
   assert.strictEqual(DEFAULTS.linkTooltip, true);
@@ -271,6 +299,7 @@ function run() {
     testPreviewCollapsedPersists,
     testPrivateModeAndSensitiveUrlsPersistSafely,
     testPerSessionCaptureStateRoundTripsAndRestores,
+    testFailedSaveLeavesPreviousFileIntact,
     testTermHostSettingsNormalize,
   ];
   let failed = 0;
