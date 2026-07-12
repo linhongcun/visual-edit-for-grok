@@ -796,18 +796,34 @@ export default function App() {
     };
   }, []);
 
-  async function onNavigate(e?: FormEvent) {
-    e?.preventDefault();
+  /**
+   * Load a URL in the right-hand preview (toolbar Go, or click link in TUI).
+   * Expands the preview pane when it was collapsed.
+   */
+  async function openPreviewUrl(
+    rawUrl: string,
+    opts: { fromTerminal?: boolean } = {},
+  ) {
     if (!isElectron()) return;
-    let url = urlInput.trim();
+    let url = rawUrl.trim();
     if (!url) return;
     if (!/^https?:\/\//i.test(url)) url = `http://${url}`;
+    try {
+      // Validate before navigating
+      // eslint-disable-next-line no-new
+      new URL(url);
+    } catch {
+      showToast(tr("toast.navFailed", { error: url }));
+      return;
+    }
+    if (previewCollapsedRef.current) {
+      await applyPreviewCollapsed(false);
+    }
     setUrlInput(url);
     if (!privateMode) {
-      setRecentPreviewUrls((current) => [
-        url,
-        ...current.filter((item) => item !== url),
-      ].slice(0, 8));
+      setRecentPreviewUrls((current) =>
+        [url, ...current.filter((item) => item !== url)].slice(0, 8),
+      );
     }
     setPreview((current) => ({
       ...current,
@@ -820,11 +836,23 @@ export default function App() {
       if (result.status) {
         setPreview((current) => ({ ...current, ...result.status }));
       }
+      if (opts.fromTerminal) {
+        showToast(
+          tr("toast.previewFromTerminal", {
+            url: shortPath(url, 56),
+          }),
+        );
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setPreview((current) => ({ ...current, loading: false, error: message }));
       showToast(tr("toast.navFailed", { error: message }));
     }
+  }
+
+  async function onNavigate(e?: FormEvent) {
+    e?.preventDefault();
+    await openPreviewUrl(urlInput);
   }
 
   async function applyPreviewCollapsed(collapsed: boolean) {
@@ -2024,6 +2052,9 @@ export default function App() {
                 active
                 focusNonce={termFocusNonce}
                 fitNonce={termFitNonce}
+                onOpenHttpUrl={(url) => {
+                  void openPreviewUrl(url, { fromTerminal: true });
+                }}
               />
             ) : null}
             {termTabs.map((tab) => (
@@ -2039,6 +2070,9 @@ export default function App() {
                     tab.id === activeTermId ? termFocusNonce : 0
                   }
                   fitNonce={tab.id === activeTermId ? termFitNonce : 0}
+                  onOpenHttpUrl={(url) => {
+                    void openPreviewUrl(url, { fromTerminal: true });
+                  }}
                 />
               </div>
             ))}

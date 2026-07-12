@@ -2,6 +2,14 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.6.9] — 2026-07-12
+
+### Open terminal links in the right preview
+
+- Clicking `http(s)://` links in the embedded TUI navigates the in-app preview (expands if collapsed)
+- ⌘/Ctrl+click still opens the system browser
+- Toast confirms which URL was loaded
+
 ## [0.6.8] — 2026-07-12
 
 ### Trackpad scroll root-cause fix (screen + TUI)

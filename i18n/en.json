@@ -138,6 +138,7 @@
   "toast.captureFailed": "Couldn't capture",
   "toast.stateFailed": "Could not read app state: {error}",
   "toast.navFailed": "Preview navigation failed: {error}",
+  "toast.previewFromTerminal": "Preview: {url}",
   "toast.staleTargetFrame": "The target belongs to an earlier page, so Frame will capture the full viewport.",
   "toast.noTargetFrame": "No target is selected, so Frame will capture the full viewport.",
   "toast.shellOffCopy": "Shell is off; the capture will be copied for manual paste.",

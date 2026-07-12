@@ -39,6 +39,20 @@ interface Props {
   focusNonce?: number;
   /** Increment after splitter / layout settle to force fit + PTY resize */
   fitNonce?: number;
+  /**
+   * Open http(s) links from the terminal in the in-app preview.
+   * ⌘/Ctrl+click still uses the system browser via openExternal.
+   */
+  onOpenHttpUrl?: (url: string) => void;
+}
+
+function isHttpUrl(uri: string): boolean {
+  try {
+    const parsed = new URL(uri);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 export default function TerminalPane({
@@ -46,6 +60,7 @@ export default function TerminalPane({
   active,
   focusNonce = 0,
   fitNonce = 0,
+  onOpenHttpUrl,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -56,6 +71,7 @@ export default function TerminalPane({
   const focusTimerRef = useRef<number | null>(null);
   const resizeTimerRef = useRef<number | null>(null);
   const sessionIdRef = useRef(sessionId);
+  const onOpenHttpUrlRef = useRef(onOpenHttpUrl);
   /** Pixel-mode deltaY summed within the current animation frame */
   const wheelFrameDeltaRef = useRef(0);
   const wheelFrameRafRef = useRef<number | null>(null);
@@ -66,6 +82,10 @@ export default function TerminalPane({
   useEffect(() => {
     sessionIdRef.current = sessionId;
   }, [sessionId]);
+
+  useEffect(() => {
+    onOpenHttpUrlRef.current = onOpenHttpUrl;
+  }, [onOpenHttpUrl]);
 
   function clearFocusTimer() {
     if (focusTimerRef.current != null) {
@@ -208,7 +228,14 @@ export default function TerminalPane({
     term.loadAddon(unicode11);
     term.unicode.activeVersion = "11";
     term.loadAddon(
-      new WebLinksAddon((_event, uri) => {
+      new WebLinksAddon((event, uri) => {
+        // ⌘/Ctrl+click → system browser; plain click http(s) → right preview
+        const preferExternal =
+          Boolean(event?.metaKey) || Boolean(event?.ctrlKey);
+        if (!preferExternal && isHttpUrl(uri) && onOpenHttpUrlRef.current) {
+          onOpenHttpUrlRef.current(uri);
+          return;
+        }
         void window.vefg.openExternal(uri).catch(() => {
           // Main validates schemes and owns the native browser handoff.
         });
