@@ -74,23 +74,39 @@ function testEmptyGeometry() {
 function testFaultRingCapAndScrub() {
   const ring = new PageFaultRing({ maxSize: 5 });
   assert.strictEqual(formatPageFaultsBlock(ring.list()), "");
+  // Secrets first — assert scrubbing on the actual scrubbed entries
   ring.push({
     kind: "fail-load",
     message: "net::ERR_FAILED https://x.test/?password=hunter2",
   });
   ring.push({
     kind: "console:error",
-    message: 'Uncaught Error token=abc123secret',
+    message: "Uncaught Error token=abc123secret",
   });
+  const secretBody = formatPageFaultsBlock(ring.list(8));
+  assert.ok(secretBody.includes("fail-load"));
+  assert.ok(secretBody.includes("console:error"));
+  assert.ok(!secretBody.includes("hunter2"), "password query must not leak");
+  assert.ok(
+    !secretBody.includes("abc123secret"),
+    "bare token= value must not leak",
+  );
+  assert.ok(
+    secretBody.includes(REDACTED_VALUE) ||
+      secretBody.includes("%5BREDACTED%5D"),
+    "redaction marker present",
+  );
+
+  // Cap: older entries drop when ring fills
   for (let i = 0; i < 10; i++) {
     ring.push({ kind: "console:warn", message: `w${i}` });
   }
   const list = ring.list(8);
   assert.ok(list.length <= 5);
   const body = formatPageFaultsBlock(list);
-  assert.ok(body.includes("fail-load") || body.includes("console:warn"));
+  assert.ok(body.includes("console:warn"));
   assert.ok(!body.includes("hunter2"));
-  assert.ok(!body.includes("abc123secret") || body.includes(REDACTED_VALUE));
+  assert.ok(!body.includes("abc123secret"));
 }
 
 function testScrubFaultMessage() {
@@ -98,6 +114,11 @@ function testScrubFaultMessage() {
     "fail https://example.com/a?access_token=tok123&ok=1",
   );
   assert.ok(!s.includes("tok123"));
+
+  const bare = scrubFaultMessage("Uncaught Error token=abc123secret at line 1");
+  assert.ok(!bare.includes("abc123secret"), "bare token= must redact");
+  assert.ok(bare.includes(REDACTED_VALUE));
+  assert.ok(bare.includes("token="), "key prefix may remain");
 }
 
 function testPayloadFences() {
@@ -140,6 +161,71 @@ function testMainWiresFaultRing() {
   assert.ok(main.includes("console-message"));
 }
 
+/**
+ * Regression: real Aim path stamps selection via stampSelectionContext.
+ * Preload-shaped captureContext with pageHeight must survive stamp so
+ * buildClipboardPayload emits page_css_px + pixels_below.
+ */
+function testStampSelectionPreservesPageGeometryForPayload() {
+  const { stampSelectionContext } = require("../electron/runtime-policy.cjs");
+  // Shape emitted by preview-preload describe() before main stamps
+  const rawSelection = {
+    tag: "button",
+    id: "cta",
+    text: "Go",
+    pageUrl: "https://example.test/tall",
+    pageTitle: "Tall",
+    captureContext: {
+      navigationId: 3,
+      pageUrl: "https://example.test/tall",
+      viewport: {
+        width: 800,
+        height: 600,
+        devicePixelRatio: 2,
+        pageWidth: 800,
+        pageHeight: 2400,
+      },
+      page: { width: 800, height: 2400, scrollWidth: 800, scrollHeight: 2400 },
+      pageWidth: 800,
+      pageHeight: 2400,
+      scroll: { x: 0, y: 200 },
+    },
+  };
+  // Same merge pattern as main attachSelectionContext
+  const prior = rawSelection.captureContext;
+  const priorViewport = prior.viewport || {};
+  const priorScroll = prior.scroll || {};
+  const stamped = stampSelectionContext(rawSelection, {
+    navigationId: 3,
+    navigationToken: "tok",
+    sourceId: 9,
+    pageUrl: rawSelection.pageUrl,
+    viewport: {
+      ...priorViewport,
+      scrollX: priorViewport.scrollX ?? priorScroll.x ?? 0,
+      scrollY: priorViewport.scrollY ?? priorScroll.y ?? 0,
+    },
+  });
+
+  assert.ok(stamped.captureContext, "stamped captureContext");
+  assert.ok(
+    stamped.captureContext.pageHeight === 2400 ||
+      stamped.captureContext.page?.height === 2400 ||
+      stamped.captureContext.viewport?.pageHeight === 2400,
+    "pageHeight must survive stamp",
+  );
+
+  const info = pageInfoFromSelection(stamped);
+  assert.ok(info, "pageInfo from stamped selection");
+  assert.strictEqual(info.pixelsAbove, 200);
+  assert.strictEqual(info.pixelsBelow, 2400 - 600 - 200);
+
+  const text = buildClipboardPayload({ selection: stamped });
+  assert.ok(text.includes("```page_info"), "page_info fence after stamp");
+  assert.ok(text.includes("page_css_px:"), "page size after stamp");
+  assert.ok(text.includes("pixels_below: 1600"), "pixels_below after stamp");
+}
+
 function run() {
   const tests = [
     testGeometryPixelsAboveBelow,
@@ -149,6 +235,7 @@ function run() {
     testScrubFaultMessage,
     testPayloadFences,
     testMainWiresFaultRing,
+    testStampSelectionPreservesPageGeometryForPayload,
   ];
   let failed = 0;
   for (const t of tests) {

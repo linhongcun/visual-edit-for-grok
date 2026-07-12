@@ -213,6 +213,13 @@ function formatPageInfoBlock(info, meta = {}) {
 }
 
 /**
+ * Secret key=value in free-form console/load text.
+ * Includes bare `token=` (same spirit as clipboard-payload SENSITIVE_ATTRIBUTE_VALUE).
+ */
+const FAULT_SECRET_ASSIGNMENT =
+  /(access[_-]?token|refresh[_-]?token|\btoken\b|secret|auth(?:orization)?|password|passwd|credential|api[_-]?key|session(?:id)?|cookie|bearer)(\s*["']?\s*[=:]\s*["']?)([^\s"'&,;]+)/gi;
+
+/**
  * Scrub free-form fault text (URLs + secret-ish tokens).
  * @param {unknown} message
  * @returns {string}
@@ -224,10 +231,8 @@ function scrubFaultMessage(message) {
     /(https?:\/\/[^\s"'<>]+)/gi,
     (match) => sanitizePageUrl(match) || REDACTED_VALUE,
   );
-  s = s.replace(
-    /(access[_-]?token|refresh[_-]?token|api[_-]?key|password|secret|bearer)\s*[=:]\s*["']?[^\s"'&,;]+/gi,
-    (m) => m.replace(/([=:]\s*["']?).+$/i, `$1${REDACTED_VALUE}`),
-  );
+  // Redact key=value secrets including bare token=abc123secret
+  s = s.replace(FAULT_SECRET_ASSIGNMENT, `$1$2${REDACTED_VALUE}`);
   return compactScalar(s, MAX_FAULT_MESSAGE);
 }
 

@@ -332,27 +332,130 @@ function normalizeViewport(viewport) {
     ),
   );
   if (Number.isFinite(dpr) && dpr > 0) normalized.devicePixelRatio = dpr;
+  // Document size for page_info (browser-use PageInfo) — must survive stamp
+  const pageWidth = Number(
+    firstDefined(
+      dimensions.pageWidth,
+      dimensions.scrollWidth,
+      viewport.pageWidth,
+      viewport.page?.width,
+      viewport.page?.scrollWidth,
+    ),
+  );
+  const pageHeight = Number(
+    firstDefined(
+      dimensions.pageHeight,
+      dimensions.scrollHeight,
+      viewport.pageHeight,
+      viewport.page?.height,
+      viewport.page?.scrollHeight,
+    ),
+  );
+  if (Number.isFinite(pageWidth) && pageWidth > 0) {
+    normalized.pageWidth = pageWidth;
+  }
+  if (Number.isFinite(pageHeight) && pageHeight > 0) {
+    normalized.pageHeight = pageHeight;
+  }
   return normalized;
 }
 
 /**
  * Attach the document identity used by freshness checks without mutating the
  * selection emitted by the picker.
+ * Preserves preload document geometry (pageWidth/pageHeight/page/scroll) so
+ * page_info pixels_below survives Aim/Frame stamp (browser-use PageInfo).
  * @param {object} selection
  * @param {object} context
  * @returns {object}
  */
 function stampSelectionContext(selection, context = {}) {
+  const prior =
+    selection?.captureContext && typeof selection.captureContext === "object"
+      ? selection.captureContext
+      : {};
+  const priorViewport =
+    prior.viewport && typeof prior.viewport === "object" ? prior.viewport : {};
+  const contextViewport =
+    context.viewport && typeof context.viewport === "object"
+      ? context.viewport
+      : {};
+  // Merge prior preload geometry into stamp input so normalizeViewport keeps page size
+  const viewportInput = {
+    ...prior,
+    ...context,
+    viewport: {
+      ...priorViewport,
+      ...contextViewport,
+      pageWidth: firstDefined(
+        contextViewport.pageWidth,
+        priorViewport.pageWidth,
+        prior.pageWidth,
+        prior.page?.width,
+        context.pageWidth,
+      ),
+      pageHeight: firstDefined(
+        contextViewport.pageHeight,
+        priorViewport.pageHeight,
+        prior.pageHeight,
+        prior.page?.height,
+        context.pageHeight,
+      ),
+    },
+    scroll: context.scroll || prior.scroll || {},
+    page: context.page || prior.page || {},
+  };
+  const viewport = normalizeViewport(viewportInput);
+
+  const pageWidth = firstDefined(
+    viewport?.pageWidth,
+    prior.pageWidth,
+    prior.page?.width,
+    priorViewport.pageWidth,
+    context.pageWidth,
+  );
+  const pageHeight = firstDefined(
+    viewport?.pageHeight,
+    prior.pageHeight,
+    prior.page?.height,
+    priorViewport.pageHeight,
+    context.pageHeight,
+  );
+  const page =
+    (prior.page && typeof prior.page === "object" ? prior.page : null) ||
+    (context.page && typeof context.page === "object" ? context.page : null) ||
+    (Number.isFinite(Number(pageWidth)) || Number.isFinite(Number(pageHeight))
+      ? {
+          width: Number(pageWidth) || undefined,
+          height: Number(pageHeight) || undefined,
+          scrollWidth: Number(pageWidth) || undefined,
+          scrollHeight: Number(pageHeight) || undefined,
+        }
+      : null);
+
+  /** @type {Record<string, unknown>} */
+  const captureContext = {
+    pageUrl: context.pageUrl || selection?.pageUrl || prior.pageUrl || null,
+    navigationToken: context.navigationToken ?? prior.navigationToken,
+    navigationId: context.navigationId ?? prior.navigationId,
+    sourceId: context.sourceId ?? prior.sourceId,
+    viewport,
+  };
+  if (page) captureContext.page = page;
+  if (Number.isFinite(Number(pageWidth)) && Number(pageWidth) > 0) {
+    captureContext.pageWidth = Number(pageWidth);
+  }
+  if (Number.isFinite(Number(pageHeight)) && Number(pageHeight) > 0) {
+    captureContext.pageHeight = Number(pageHeight);
+  }
+  if (prior.scroll || context.scroll) {
+    captureContext.scroll = context.scroll || prior.scroll;
+  }
+
   return {
     ...selection,
     pageUrl: context.pageUrl || selection?.pageUrl || null,
-    captureContext: {
-      pageUrl: context.pageUrl || selection?.pageUrl || null,
-      navigationToken: context.navigationToken,
-      navigationId: context.navigationId,
-      sourceId: context.sourceId,
-      viewport: normalizeViewport(context),
-    },
+    captureContext,
   };
 }
 

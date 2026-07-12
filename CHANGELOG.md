@@ -2,6 +2,14 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.8.7] — 2026-07-12
+
+### Fix page_info geometry + fault scrubbing (browser-use follow-up)
+
+- `stampSelectionContext` / `normalizeViewport` preserve document pageWidth/pageHeight so `pixels_below` survives real Aim stamp
+- `scrubFaultMessage` redacts bare `token=` (and aligned secret keys), not only access_token-style names
+- Regression tests drive stamp → payload path and assert secrets never leak
+
 ## [0.8.6] — 2026-07-12
 
 ### browser-use-inspired page context for Grok
