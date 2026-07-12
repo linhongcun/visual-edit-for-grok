@@ -159,6 +159,142 @@ function contextSnapshot() {
   };
 }
 
+/** agent-browser-inspired interactive roles (subset). */
+const INTERACTIVE_TAGS = new Set([
+  "a",
+  "button",
+  "input",
+  "select",
+  "textarea",
+  "summary",
+  "option",
+  "label",
+]);
+const INTERACTIVE_ROLES = new Set([
+  "button",
+  "link",
+  "textbox",
+  "checkbox",
+  "radio",
+  "combobox",
+  "menuitem",
+  "tab",
+  "switch",
+  "searchbox",
+  "option",
+]);
+
+function inferRoleForEl(el) {
+  if (!(el instanceof Element)) return "generic";
+  const explicit = el.getAttribute("role");
+  if (explicit) return explicit.slice(0, 40);
+  const tag = el.tagName.toLowerCase();
+  if (tag === "a") return "link";
+  if (tag === "button") return "button";
+  if (tag === "input") {
+    const type = (el.getAttribute("type") || "text").toLowerCase();
+    if (type === "submit" || type === "button" || type === "reset") return "button";
+    if (type === "checkbox") return "checkbox";
+    if (type === "radio") return "radio";
+    return "textbox";
+  }
+  if (tag === "textarea") return "textbox";
+  if (tag === "select") return "combobox";
+  if (tag === "img") return "image";
+  if (/^h[1-6]$/.test(tag)) return "heading";
+  return tag;
+}
+
+function accessibleNameForEl(el) {
+  if (!(el instanceof Element)) return "";
+  const aria = el.getAttribute("aria-label");
+  if (aria) return aria.trim().slice(0, 80);
+  const title = el.getAttribute("title");
+  if (title) return title.trim().slice(0, 80);
+  const ph = el.getAttribute("placeholder");
+  if (ph) return ph.trim().slice(0, 80);
+  const alt = el.getAttribute("alt");
+  if (alt) return alt.trim().slice(0, 80);
+  return (el.innerText || el.textContent || "").trim().slice(0, 80);
+}
+
+function isInteractiveEl(el) {
+  if (!(el instanceof Element)) return false;
+  if (el.closest?.("#__vefg_badge")) return false;
+  const tag = el.tagName.toLowerCase();
+  if (INTERACTIVE_TAGS.has(tag)) return true;
+  const role = el.getAttribute("role");
+  if (role && INTERACTIVE_ROLES.has(role)) return true;
+  if (el.tabIndex >= 0) return true;
+  if (typeof el.onclick === "function") return true;
+  return false;
+}
+
+/** Compact neighbor for agent_snapshot (not full describe). */
+function miniNeighbor(el) {
+  return {
+    tag: el.tagName.toLowerCase(),
+    role: inferRoleForEl(el),
+    name: accessibleNameForEl(el),
+    id: el.id || null,
+    selector: cssPath(el).slice(0, 200),
+    text: accessibleNameForEl(el),
+    attributes: el.id ? { id: el.id } : {},
+  };
+}
+
+/**
+ * Nearby interactive siblings / parent children (agent-browser neighborhood spirit).
+ * Caps size; excludes the target element.
+ */
+function nearbyInteractive(el, limit = 6) {
+  if (!(el instanceof Element)) return [];
+  const out = [];
+  const seen = new Set();
+  const push = (candidate) => {
+    if (!(candidate instanceof Element) || candidate === el) return;
+    if (seen.has(candidate) || !isInteractiveEl(candidate)) return;
+    seen.add(candidate);
+    out.push(miniNeighbor(candidate));
+  };
+
+  const parent = el.parentElement;
+  if (parent) {
+    for (const child of Array.from(parent.children || [])) {
+      if (out.length >= limit) break;
+      push(child);
+    }
+  }
+  // Walk previous/next element siblings a few steps for nearby controls
+  let prev = el.previousElementSibling;
+  let next = el.nextElementSibling;
+  let steps = 0;
+  while (out.length < limit && steps < 8 && (prev || next)) {
+    if (prev) {
+      push(prev);
+      if (isInteractiveEl(prev)) {
+        /* already pushed */
+      } else {
+        for (const c of Array.from(prev.querySelectorAll?.("a,button,input,select,textarea,[role=button]") || []).slice(0, 2)) {
+          if (out.length >= limit) break;
+          push(c);
+        }
+      }
+      prev = prev.previousElementSibling;
+    }
+    if (next && out.length < limit) {
+      push(next);
+      for (const c of Array.from(next.querySelectorAll?.("a,button,input,select,textarea,[role=button]") || []).slice(0, 2)) {
+        if (out.length >= limit) break;
+        push(c);
+      }
+      next = next.nextElementSibling;
+    }
+    steps += 1;
+  }
+  return out.slice(0, limit);
+}
+
 function describe(el) {
   const rect = el.getBoundingClientRect();
   const classes = cleanClasses(el);
@@ -168,6 +304,8 @@ function describe(el) {
     attributes[attr.name] =
       attr.name === "class" ? classes.join(" ") : attr.value.slice(0, 300);
   }
+  const role = inferRoleForEl(el);
+  const accessibleName = accessibleNameForEl(el);
   return {
     tag: el.tagName.toLowerCase(),
     id: el.id || null,
@@ -176,7 +314,11 @@ function describe(el) {
     selector: cssPath(el),
     domPath: domPath(el),
     text: (el.innerText || el.textContent || "").trim().slice(0, 500),
+    role,
+    accessibleName,
+    name: accessibleName,
     attributes,
+    neighbors: nearbyInteractive(el, 6),
     computedStyle: keyStyles(el),
     boundingBox: {
       x: Math.round(rect.x),

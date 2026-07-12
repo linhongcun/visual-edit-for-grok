@@ -1,6 +1,7 @@
 /**
  * Pure paste payload builder for native Grok Build TUI.
  * Shape aligned with Cursor's browser_element + additive intent / style diffs.
+ * Also attaches agent-browser-inspired compact @eN snapshot (see agent-snapshot.cjs).
  *
  * @typedef {{ before?: string, after?: string }} StyleChange
  * @typedef {Record<string, StyleChange | string>} StyleDiffMap
@@ -290,6 +291,20 @@ function buildClipboardPayload(opts = {}) {
 
     lines.push("```");
     lines.push("");
+
+    // Lazy require avoids circular load with agent-snapshot.cjs
+    try {
+      const { buildAgentSnapshot } = require("./agent-snapshot.cjs");
+      const agentSnap = buildAgentSnapshot(selection);
+      if (agentSnap) {
+        lines.push("```agent_snapshot");
+        lines.push(agentSnap);
+        lines.push("```");
+        lines.push("");
+      }
+    } catch {
+      /* snapshot helper optional */
+    }
   } else {
     lines.push("@");
     lines.push("```browser_element");
@@ -416,6 +431,8 @@ function prefillStyleDiffsFromSelection(selection) {
 module.exports = {
   buildClipboardPayload,
   sanitizeAttributes,
+  sanitizePageUrl,
+  compactScalar,
   selectionContentFingerprint,
   compactComputedStyles,
   selectionViewport,

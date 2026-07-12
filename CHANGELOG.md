@@ -2,6 +2,16 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.8.5] — 2026-07-12
+
+### agent-browser-inspired capture context
+
+- Compact `agent_snapshot` block in Grok paste: `@eN [role] "name"` for Aim target + nearby interactive neighbors (token-thrifty; no outerHTML)
+- Pure helper `electron/agent-snapshot.cjs` with redaction and size caps
+- Aim preload attaches role / accessibleName / neighbors
+- Screenshots hide native scrollbars during capture (agent-browser default; temporary CSS around `capturePage`)
+- Inventory: `docs/AGENT-BROWSER-INVENTORY.md`
+
 ## [0.8.4] — 2026-07-12
 
 ### Fix: Aim path participates in long-task notifications

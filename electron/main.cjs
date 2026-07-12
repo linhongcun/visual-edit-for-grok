@@ -89,6 +89,10 @@ const {
   clampLongTaskThresholdSec,
   DEFAULT_LONG_TASK_THRESHOLD_SEC,
 } = require("./notify-policy.cjs");
+const {
+  shouldHideScrollbarsForCapture,
+  HIDE_SCROLLBAR_CSS,
+} = require("./agent-snapshot.cjs");
 
 /** Privacy-safe recent errors for diagnostics (Warp-inspired local ring buffer). */
 const stabilityBuffer = new StabilityErrorBuffer({ maxSize: 30 });
@@ -2129,60 +2133,84 @@ async function takeScreenshotFile(opts = {}) {
   if (!previewView) throw new Error("Preview not ready");
   await ensurePrivateDirectory(CAPTURE_DIR);
 
-  const full = await previewView.webContents.capturePage();
-  if (full.isEmpty()) throw new Error("Screenshot is empty");
-
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-
-  // Crop in memory; write only the file used for multimodal delivery
-  // (no dual full+crop PNG on every pick).
-  let outImage = full;
-  let cropped = false;
-  const bounds = opts.bounds;
-
-  if (bounds && Number(bounds.width) > 0 && Number(bounds.height) > 0) {
+  // agent-browser default: hide native scrollbars for consistent capture images
+  let scrollbarCssKey = null;
+  if (shouldHideScrollbarsForCapture(opts)) {
     try {
-      const size = full.getSize();
-      const pad = Math.max(0, Math.min(240, Number(opts.padding) || 96));
-      const left = Math.round(bounds.left ?? bounds.x ?? 0);
-      const top = Math.round(bounds.top ?? bounds.y ?? 0);
-      const bw = Math.round(bounds.width);
-      const bh = Math.round(bounds.height);
-
-      // capturePage returns device pixels; bounds from DOM are CSS px
-      const viewBounds = previewView.getBounds();
-      const dprX = size.width / Math.max(1, viewBounds.width);
-      const dprY = size.height / Math.max(1, viewBounds.height);
-      const dpr = (dprX + dprY) / 2;
-
-      const x = Math.max(0, Math.floor((left - pad) * dpr));
-      const y = Math.max(0, Math.floor((top - pad) * dpr));
-      const w = Math.min(size.width - x, Math.ceil((bw + pad * 2) * dpr));
-      const h = Math.min(size.height - y, Math.ceil((bh + pad * 2) * dpr));
-
-      if (w > 8 && h > 8) {
-        outImage = full.crop({ x, y, width: w, height: h });
-        cropped = true;
-      }
-    } catch (err) {
-      console.warn("Element crop failed, using full page:", err);
-      outImage = full;
-      cropped = false;
+      scrollbarCssKey = await previewView.webContents.insertCSS(
+        HIDE_SCROLLBAR_CSS,
+      );
+      // Brief paint settle so Chromium applies scrollbar styles before capture
+      await new Promise((r) => setTimeout(r, 16));
+    } catch {
+      scrollbarCssKey = null;
     }
   }
 
-  const prefix = opts.reason === "pick" ? "pick" : "capture";
-  const filePath = path.join(
-    CAPTURE_DIR,
-    `${prefix}${cropped ? "-el" : "-full"}-${stamp}-${crypto.randomBytes(3).toString("hex")}.png`,
-  );
-  await writePrivatePng(filePath, outImage.toPNG());
-  // Do not mutate lastScreenshotPath here — callers commit only on full success
-  // via resolvePickCommit / explicit assign after deliver (avoids half-paired state).
+  try {
+    const full = await previewView.webContents.capturePage();
+    if (full.isEmpty()) throw new Error("Screenshot is empty");
 
-  scheduleCaptureCleanup();
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
 
-  return { path: filePath, fullPath: filePath, cropped };
+    // Crop in memory; write only the file used for multimodal delivery
+    // (no dual full+crop PNG on every pick).
+    let outImage = full;
+    let cropped = false;
+    const bounds = opts.bounds;
+
+    if (bounds && Number(bounds.width) > 0 && Number(bounds.height) > 0) {
+      try {
+        const size = full.getSize();
+        const pad = Math.max(0, Math.min(240, Number(opts.padding) || 96));
+        const left = Math.round(bounds.left ?? bounds.x ?? 0);
+        const top = Math.round(bounds.top ?? bounds.y ?? 0);
+        const bw = Math.round(bounds.width);
+        const bh = Math.round(bounds.height);
+
+        // capturePage returns device pixels; bounds from DOM are CSS px
+        const viewBounds = previewView.getBounds();
+        const dprX = size.width / Math.max(1, viewBounds.width);
+        const dprY = size.height / Math.max(1, viewBounds.height);
+        const dpr = (dprX + dprY) / 2;
+
+        const x = Math.max(0, Math.floor((left - pad) * dpr));
+        const y = Math.max(0, Math.floor((top - pad) * dpr));
+        const w = Math.min(size.width - x, Math.ceil((bw + pad * 2) * dpr));
+        const h = Math.min(size.height - y, Math.ceil((bh + pad * 2) * dpr));
+
+        if (w > 8 && h > 8) {
+          outImage = full.crop({ x, y, width: w, height: h });
+          cropped = true;
+        }
+      } catch (err) {
+        console.warn("Element crop failed, using full page:", err);
+        outImage = full;
+        cropped = false;
+      }
+    }
+
+    const prefix = opts.reason === "pick" ? "pick" : "capture";
+    const filePath = path.join(
+      CAPTURE_DIR,
+      `${prefix}${cropped ? "-el" : "-full"}-${stamp}-${crypto.randomBytes(3).toString("hex")}.png`,
+    );
+    await writePrivatePng(filePath, outImage.toPNG());
+    // Do not mutate lastScreenshotPath here — callers commit only on full success
+    // via resolvePickCommit / explicit assign after deliver (avoids half-paired state).
+
+    scheduleCaptureCleanup();
+
+    return { path: filePath, fullPath: filePath, cropped };
+  } finally {
+    if (scrollbarCssKey) {
+      try {
+        await previewView.webContents.removeInsertedCSS(scrollbarCssKey);
+      } catch {
+        /* best-effort restore */
+      }
+    }
+  }
 }
 
 function buildCaptureMeta({
