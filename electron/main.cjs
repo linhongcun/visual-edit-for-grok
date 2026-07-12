@@ -185,6 +185,7 @@ const {
   computeWorkspaceLayout,
   resolveWorkspaceMaximize,
   planPreviewRecovery,
+  shouldPersistWorkspaceLayout,
   DEFAULT_CLEANUP_MIN_INTERVAL_MS,
   DEFAULT_SETTINGS_DEBOUNCE_MS,
   DEFAULT_PREVIEW_RECOVERY_MAX,
@@ -1013,7 +1014,7 @@ function installAppMenu() {
         {
           label: "Recover Preview",
           click: () => {
-            softRecoverPreview();
+            softRecoverPreview({ force: true, forceReason: "manual" });
           },
         },
         { type: "separator" },
@@ -1327,15 +1328,23 @@ function destroyPreviewView() {
 /**
  * Wave-inspired soft recovery: recreate preview WebContentsView without
  * killing the main window or Grok PTY tabs.
+ *
+ * After render-process-gone the WebContents often still exists and
+ * isDestroyed() is false — pass force:true so we recreate the zombie view.
+ *
+ * @param {{ force?: boolean, forceReason?: string }} [opts]
  * @returns {{ ok: boolean, action: string, reason: string }}
  */
-function softRecoverPreview() {
+function softRecoverPreview(opts = {}) {
+  const force = Boolean(opts.force);
   const plan = planPreviewRecovery({
     hasMainWindow: Boolean(mainWindow && !mainWindow.isDestroyed()),
     previewMissing: !previewView,
     previewDestroyed: Boolean(
       previewView && previewView.webContents?.isDestroyed(),
     ),
+    force,
+    forceReason: opts.forceReason || (force ? "force" : undefined),
     recoveryCount: previewRecoveryCount,
     maxRecoveries: DEFAULT_PREVIEW_RECOVERY_MAX,
   });
@@ -1344,6 +1353,7 @@ function softRecoverPreview() {
   }
   previewRecoveryCount = plan.nextRecoveryCount;
   try {
+    // Always tear down first — force path must not leave a live zombie view
     destroyPreviewView();
     createPreviewView();
     layoutViews();
@@ -1621,10 +1631,11 @@ function createPreviewView() {
       },
       { throttleKey: `preview-crash:${details?.reason || "x"}` },
     );
-    // Defer recreate so Electron can finish teardown of the dead process
+    // Defer recreate so Electron can finish teardown of the dead process.
+    // force:true — crashed WebContents is often still "alive" (not isDestroyed).
     setTimeout(() => {
       try {
-        softRecoverPreview();
+        softRecoverPreview({ force: true, forceReason: "crash" });
       } catch {
         /* ignore */
       }
@@ -1852,6 +1863,8 @@ function setPreviewCollapsed(next, { forcePersist = true } = {}) {
 
 /**
  * Wave-style maximize: expand terminal or preview; toggle again restores.
+ * Temporary maximize layout is session-only — do not write min-split / collapsed
+ * into durable settings while maximized (quit would corrupt next launch).
  * @param {"terminal"|"preview"|"none"|"toggle-terminal"|"toggle-preview"} action
  */
 function applyWorkspaceMaximize(action) {
@@ -1870,11 +1883,14 @@ function applyWorkspaceMaximize(action) {
   layoutMaximized = next.maximized;
   layoutRestoreSplitRatio = next.restoreSplitRatio;
   layoutRestorePreviewCollapsed = next.restorePreviewCollapsed;
-  // Persist only durable layout fields — never "maximized" itself
-  persistDebounced(
-    { splitRatio, previewCollapsed },
-    { force: true },
-  );
+  // Persist only when not maximized (restore path). Entering maximize keeps
+  // prior durable split/collapse on disk; restore writes the baseline back.
+  if (shouldPersistWorkspaceLayout(next)) {
+    persistDebounced(
+      { splitRatio, previewCollapsed },
+      { force: true },
+    );
+  }
   layoutViews();
   const bounds = getLayoutBounds();
   sendToRenderer("layout:bounds", {
@@ -3787,7 +3803,10 @@ function registerIpc() {
     return applyWorkspaceMaximize(act);
   });
 
-  ipcMain.handle("preview:recover", async () => softRecoverPreview());
+  // Manual Recover always force-recreates within budget (zombie views included)
+  ipcMain.handle("preview:recover", async () =>
+    softRecoverPreview({ force: true, forceReason: "manual" }),
+  );
 
   ipcMain.handle("project:pick-cwd", async () => {
     const result = await dialog.showOpenDialog(mainWindow, {

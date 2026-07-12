@@ -37,14 +37,19 @@
 | Toggle same surface again | Restore `restoreSplitRatio` + `restorePreviewCollapsed` |
 
 Maximized mode is **session memory only** (not persisted) so settings split is not corrupted.
+`shouldPersistWorkspaceLayout` only returns true when `maximized == null` (restore / normal);
+entering maximize must **not** write temporary `splitRatio` / `previewCollapsed` to disk.
 
 ## Preview recovery contract
 
 | Input | Action |
 |-------|--------|
-| Renderer gone / unusable view | `recreate` (bounded) |
+| Renderer gone / unusable view | `recreate` via `force: true` (bounded) — crashed WebContents often still "exists" |
+| Menu **Recover Preview** | `force: true` + `forceReason: "manual"` |
+| Missing / `isDestroyed` view | `recreate` without force |
 | Over recovery budget | `none` (report only; user reloads) |
 | Main window missing | `none` |
+| Healthy present view (no force) | `none` / `preview-ok` |
 
 ## Key files
 

@@ -1098,10 +1098,16 @@ function resolveWorkspaceMaximize(state = {}, action = "none") {
  * Plan soft recovery for a broken preview WebContentsView (Wave reconnect spirit
  * mapped to local preview, not SSH).
  *
+ * After `render-process-gone`, WebContents often still exists and `isDestroyed()`
+ * is false — callers must pass `force: true` (crash / manual Recover) so we
+ * recreate within budget instead of treating the zombie as healthy.
+ *
  * @param {{
  *   hasMainWindow?: boolean,
  *   previewMissing?: boolean,
  *   previewDestroyed?: boolean,
+ *   force?: boolean,
+ *   forceReason?: string,
  *   recoveryCount?: number,
  *   maxRecoveries?: number,
  * }} input
@@ -1134,6 +1140,15 @@ function planPreviewRecovery(input = {}) {
       nextRecoveryCount: recoveryCount,
     };
   }
+  // force: crash path / menu Recover — recreate even if view still held
+  if (input.force) {
+    const forceReason = String(input.forceReason || "").trim();
+    return {
+      action: "recreate",
+      reason: forceReason || "force",
+      nextRecoveryCount: recoveryCount + 1,
+    };
+  }
   if (input.previewMissing || input.previewDestroyed) {
     return {
       action: "recreate",
@@ -1146,6 +1161,18 @@ function planPreviewRecovery(input = {}) {
     reason: "preview-ok",
     nextRecoveryCount: recoveryCount,
   };
+}
+
+/**
+ * Whether applyWorkspaceMaximize should write split/collapse to disk.
+ * Temporary maximized layout is session-only; only restore (or non-max layout)
+ * may persist durable settings.
+ *
+ * @param {{ maximized?: null | "terminal" | "preview" }} next
+ * @returns {boolean}
+ */
+function shouldPersistWorkspaceLayout(next = {}) {
+  return next.maximized == null;
 }
 
 /**
@@ -1276,6 +1303,7 @@ module.exports = {
   clampSplitRatio,
   resolveWorkspaceMaximize,
   planPreviewRecovery,
+  shouldPersistWorkspaceLayout,
   planAimPickEvent,
   resolvePickCommit,
 };

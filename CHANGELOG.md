@@ -2,6 +2,14 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.8.12] — 2026-07-12
+
+### Fix Wave maximize persist + preview crash recovery
+
+- **Crash recovery:** `planPreviewRecovery` + `softRecoverPreview({ force })` recreate zombie WebContents after `render-process-gone` (still “alive” / not `isDestroyed`); menu Recover forces the same path within budget
+- **Maximize persist:** temporary max layout is session-only — `shouldPersistWorkspaceLayout` skips disk write while maximized so quit does not leave min-split or collapsed preview
+- Unit tests for force-recreate crash shape and persist gate
+
 ## [0.8.11] — 2026-07-12
 
 ### Wave Terminal-inspired maximize + preview soft recovery

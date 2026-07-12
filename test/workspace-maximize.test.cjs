@@ -8,6 +8,7 @@ const path = require("path");
 const {
   resolveWorkspaceMaximize,
   planPreviewRecovery,
+  shouldPersistWorkspaceLayout,
   MAXIMIZE_PREVIEW_SPLIT_RATIO,
   DEFAULT_PREVIEW_RECOVERY_MAX,
   clampSplitRatio,
@@ -92,6 +93,31 @@ function testClampSplitRatio() {
   assert.strictEqual(clampSplitRatio(0.9), 0.75);
 }
 
+/**
+ * Skeptic finding: temporary maximize effects must not hit durable settings.
+ * Entering maximize → no persist; restore → persist restored baseline.
+ */
+function testShouldPersistOnlyWhenNotMaximized() {
+  const maxT = resolveWorkspaceMaximize(baseState({ splitRatio: 0.55 }), "terminal");
+  assert.strictEqual(maxT.maximized, "terminal");
+  assert.strictEqual(maxT.previewCollapsed, true);
+  assert.strictEqual(shouldPersistWorkspaceLayout(maxT), false);
+
+  const maxP = resolveWorkspaceMaximize(baseState({ splitRatio: 0.55 }), "preview");
+  assert.strictEqual(maxP.splitRatio, MAXIMIZE_PREVIEW_SPLIT_RATIO);
+  assert.strictEqual(shouldPersistWorkspaceLayout(maxP), false);
+
+  const restored = resolveWorkspaceMaximize(maxP, "none");
+  assert.strictEqual(restored.maximized, null);
+  assert.strictEqual(restored.splitRatio, 0.55);
+  assert.strictEqual(shouldPersistWorkspaceLayout(restored), true);
+
+  assert.strictEqual(
+    shouldPersistWorkspaceLayout(baseState()),
+    true,
+  );
+}
+
 function testPreviewRecoveryRecreate() {
   const r = planPreviewRecovery({
     hasMainWindow: true,
@@ -131,6 +157,57 @@ function testPreviewRecoveryOk() {
   assert.strictEqual(r.reason, "preview-ok");
 }
 
+/**
+ * Skeptic finding: after crash, view still held and isDestroyed() false
+ * → without force, plan is preview-ok (no-op). force must recreate.
+ */
+function testPreviewRecoveryForceAfterCrashShape() {
+  // Crash-shaped inputs: view present, not destroyed, but unusable
+  const zombie = planPreviewRecovery({
+    hasMainWindow: true,
+    previewMissing: false,
+    previewDestroyed: false,
+    recoveryCount: 0,
+  });
+  assert.strictEqual(zombie.action, "none");
+  assert.strictEqual(zombie.reason, "preview-ok");
+
+  const forced = planPreviewRecovery({
+    hasMainWindow: true,
+    previewMissing: false,
+    previewDestroyed: false,
+    force: true,
+    forceReason: "crash",
+    recoveryCount: 0,
+  });
+  assert.strictEqual(forced.action, "recreate");
+  assert.strictEqual(forced.reason, "crash");
+  assert.strictEqual(forced.nextRecoveryCount, 1);
+
+  const manual = planPreviewRecovery({
+    hasMainWindow: true,
+    previewMissing: false,
+    previewDestroyed: false,
+    force: true,
+    forceReason: "manual",
+    recoveryCount: 1,
+  });
+  assert.strictEqual(manual.action, "recreate");
+  assert.strictEqual(manual.reason, "manual");
+  assert.strictEqual(manual.nextRecoveryCount, 2);
+}
+
+function testPreviewRecoveryForceStillRespectsBudget() {
+  const r = planPreviewRecovery({
+    hasMainWindow: true,
+    force: true,
+    forceReason: "crash",
+    recoveryCount: DEFAULT_PREVIEW_RECOVERY_MAX,
+  });
+  assert.strictEqual(r.action, "none");
+  assert.strictEqual(r.reason, "recovery-budget-exhausted");
+}
+
 function testMainWiresMaximizeAndRecovery() {
   const main = fs.readFileSync(
     path.join(__dirname, "../electron/main.cjs"),
@@ -138,8 +215,23 @@ function testMainWiresMaximizeAndRecovery() {
   );
   assert.ok(main.includes("resolveWorkspaceMaximize"));
   assert.ok(main.includes("planPreviewRecovery"));
+  assert.ok(main.includes("shouldPersistWorkspaceLayout"));
   assert.ok(main.includes("layout:maximize") || main.includes("applyWorkspaceMaximize"));
   assert.ok(main.includes("softRecoverPreview") || main.includes("recreatePreview"));
+  // Crash path must force recreate (not bare softRecoverPreview())
+  assert.ok(
+    /softRecoverPreview\s*\(\s*\{\s*force\s*:\s*true/.test(main),
+    "softRecoverPreview must be called with force:true on crash/manual path",
+  );
+  assert.ok(
+    main.includes('forceReason: "crash"') || main.includes("forceReason: 'crash'"),
+    "render-process-gone must pass forceReason crash",
+  );
+  // Must not always force-persist layout while maximized
+  assert.ok(
+    main.includes("shouldPersistWorkspaceLayout"),
+    "applyWorkspaceMaximize must gate disk writes via shouldPersistWorkspaceLayout",
+  );
 }
 
 function run() {
@@ -150,10 +242,13 @@ function run() {
     testSwitchMaximizeKeepsOriginalRestore,
     testNoopNoneWhenNormal,
     testClampSplitRatio,
+    testShouldPersistOnlyWhenNotMaximized,
     testPreviewRecoveryRecreate,
     testPreviewRecoveryBudget,
     testPreviewRecoveryNoWindow,
     testPreviewRecoveryOk,
+    testPreviewRecoveryForceAfterCrashShape,
+    testPreviewRecoveryForceStillRespectsBudget,
     testMainWiresMaximizeAndRecovery,
   ];
   let failed = 0;
