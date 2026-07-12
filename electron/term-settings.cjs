@@ -1,8 +1,7 @@
 /**
- * Pure terminal host settings helpers — renderer copy kept next to UI imports.
- * Keep in sync with electron/term-settings.cjs (main process packaging).
- * Duplicated deliberately so Vite bundles without pulling electron/ into the renderer graph,
- * and electron-builder asar always has electron/term-settings.cjs for settings-store.
+ * Pure terminal host settings helpers (font, scrollback, clamps).
+ * Lives under electron/ so packaged asar always includes it for main process.
+ * Inspired by mature terminal UX — reimplemented for our product (no AGPL code).
  */
 
 const TERM_FONT_SIZE_MIN = 10;
@@ -26,7 +25,7 @@ function clampTermFontSize(value, fallback = TERM_FONT_SIZE_DEFAULT) {
 
 /**
  * @param {number} current
- * @param {1 | -1 | 0} delta
+ * @param {1 | -1 | 0} delta  1=zoom in, -1=zoom out, 0=reset
  * @returns {number}
  */
 function nextTermFontSize(current, delta) {

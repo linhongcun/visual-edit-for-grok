@@ -17,7 +17,7 @@ const {
   asBoolean,
   TERM_FONT_SIZE_DEFAULT,
   TERM_SCROLLBACK_DEFAULT,
-} = require("../src/term-settings.cjs");
+} = require("./term-settings.cjs");
 
 const SETTINGS_VERSION = 3;
 const LEGACY_DEMO_URLS = new Set([

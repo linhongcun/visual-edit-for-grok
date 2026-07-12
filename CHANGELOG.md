@@ -2,6 +2,14 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.7.1] — 2026-07-12
+
+### Fix packaged app crash: missing term-settings module
+
+- Main `settings-store` required `../src/term-settings.cjs`, but electron-builder only packs `electron/` (not `src/`)
+- Move canonical helpers to `electron/term-settings.cjs`; keep a renderer-side copy under `src/` for Vite
+- App launches again from `/Applications`
+
 ## [0.7.0] — 2026-07-12
 
 ### Warp-inspired terminal host UX (A+B+C)

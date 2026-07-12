@@ -12,7 +12,7 @@ const {
   TERM_FONT_SIZE_MIN,
   TERM_FONT_SIZE_MAX,
   TERM_SCROLLBACK_DEFAULT,
-} = require("../src/term-settings.cjs");
+} = require("../electron/term-settings.cjs");
 
 function testFontClamp() {
   assert.strictEqual(clampTermFontSize(12), 12);
