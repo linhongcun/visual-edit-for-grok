@@ -84,6 +84,11 @@ const {
   buildActionableError,
   shouldConfirmQuit,
 } = require("./operator-guidance.cjs");
+const {
+  shouldShowDesktopNotification,
+  clampLongTaskThresholdSec,
+  DEFAULT_LONG_TASK_THRESHOLD_SEC,
+} = require("./notify-policy.cjs");
 
 /** Privacy-safe recent errors for diagnostics (Warp-inspired local ring buffer). */
 const stabilityBuffer = new StabilityErrorBuffer({ maxSize: 30 });
@@ -243,6 +248,10 @@ let linkTooltip = true;
 let copyOnSelect = false;
 let termScrollback = 10000;
 let notifyOnGrokExit = true;
+let notifyOnLongTask = true;
+let longTaskNotifyThresholdSec = DEFAULT_LONG_TASK_THRESHOLD_SEC;
+/** Timestamp when exclusive capture/deliver lock was taken (ms). */
+let captureLockStartedAt = 0;
 
 function termHostSettingsSnapshot() {
   return {
@@ -251,7 +260,49 @@ function termHostSettingsSnapshot() {
     copyOnSelect,
     termScrollback,
     notifyOnGrokExit,
+    notifyOnLongTask,
+    longTaskNotifyThresholdSec,
   };
+}
+
+/**
+ * Warp-style desktop notification: only when policy allows; click focuses app.
+ * @param {{ kind: "session-exit" | "long-task", title: string, body: string, durationMs?: number }} opts
+ */
+function maybeShowDesktopNotification(opts) {
+  const windowFocused = Boolean(
+    mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused(),
+  );
+  const decision = shouldShowDesktopNotification({
+    kind: opts.kind,
+    windowFocused,
+    osSupported: Notification.isSupported(),
+    notifyOnGrokExit,
+    notifyOnLongTask,
+    durationMs: opts.durationMs,
+    longTaskThresholdSec: longTaskNotifyThresholdSec,
+  });
+  if (!decision.show) return decision;
+  try {
+    const n = new Notification({
+      title: opts.title,
+      body: opts.body,
+    });
+    n.on("click", () => {
+      try {
+        if (!mainWindow || mainWindow.isDestroyed()) return;
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.show();
+        mainWindow.focus();
+      } catch {
+        /* ignore */
+      }
+    });
+    n.show();
+  } catch {
+    /* best-effort */
+  }
+  return decision;
 }
 
 function applyLoadedSettings() {
@@ -273,6 +324,15 @@ function applyLoadedSettings() {
   if (typeof s.termScrollback === "number") termScrollback = s.termScrollback;
   if (typeof s.notifyOnGrokExit === "boolean") {
     notifyOnGrokExit = s.notifyOnGrokExit;
+  }
+  if (typeof s.notifyOnLongTask === "boolean") {
+    notifyOnLongTask = s.notifyOnLongTask;
+  }
+  if (s.longTaskNotifyThresholdSec != null) {
+    longTaskNotifyThresholdSec = clampLongTaskThresholdSec(
+      s.longTaskNotifyThresholdSec,
+      DEFAULT_LONG_TASK_THRESHOLD_SEC,
+    );
   }
   // Empty locale = first run → detect system language and persist
   if (s.locale === "en" || s.locale === "zh") {
@@ -504,17 +564,23 @@ function ensureCaptureDir() {
 
 function setCaptureBusy(busy) {
   captureInFlight = Boolean(busy);
-  if (!captureInFlight) captureTargetSessionId = null;
+  if (!captureInFlight) {
+    captureTargetSessionId = null;
+    captureLockStartedAt = 0;
+  }
   sendToRenderer("capture:busy", { busy: captureInFlight });
 }
 
 /**
  * Run exclusive capture/deliver work. Rejects concurrent callers with busy status.
+ * When the lock is held long enough and the window is unfocused, may fire a
+ * Warp-style long-task desktop notification (host-visible proxy for CLI complete).
  * @template T
  * @param {() => Promise<T>} fn
+ * @param {{ label?: string }} [opts]
  * @returns {Promise<T | { busy: true, statusMessage: string }>}
  */
-async function withCaptureLock(fn) {
+async function withCaptureLock(fn, opts = {}) {
   const gate = canStartCapture({ inFlight: captureInFlight });
   if (!gate.ok) {
     // Always use actionable busy text (message + next step), not bare main.busy
@@ -524,11 +590,27 @@ async function withCaptureLock(fn) {
       statusMessage: busyText,
     };
   }
+  captureLockStartedAt = Date.now();
   setCaptureBusy(true);
   try {
     return await fn();
   } finally {
+    const started = captureLockStartedAt;
+    const durationMs = started > 0 ? Date.now() - started : 0;
     setCaptureBusy(false);
+    try {
+      maybeShowDesktopNotification({
+        kind: "long-task",
+        durationMs,
+        title: tr("notify.longTaskTitle"),
+        body: tr("notify.longTaskBody", {
+          seconds: String(Math.max(1, Math.round(durationMs / 1000))),
+          label: opts.label || tr("notify.longTaskDefaultLabel"),
+        }),
+      });
+    } catch {
+      /* ignore */
+    }
   }
 }
 
@@ -2837,22 +2919,17 @@ function createTerminalSlot(opts = {}) {
             { throttleKey: `pty-exit:${meta.id}:${code}` },
           );
         }
-        // Warp-inspired: notify when Grok/session exits while window is in background
-        if (
-          notifyOnGrokExit &&
-          Notification.isSupported() &&
-          mainWindow &&
-          !mainWindow.isDestroyed() &&
-          !mainWindow.isFocused()
-        ) {
+        // Warp-inspired: session exit while navigated away
+        {
           const label = meta.label || meta.cwd || "Terminal";
-          new Notification({
+          maybeShowDesktopNotification({
+            kind: "session-exit",
             title: tr("notify.grokExitTitle"),
             body: tr("notify.grokExitBody", {
               tab: label,
               code: String(code ?? 0),
             }),
-          }).show();
+          });
         }
       } catch (err) {
         reportMainFault(
@@ -3228,6 +3305,12 @@ function registerIpc() {
       if (typeof partial.notifyOnGrokExit === "boolean") {
         patch.notifyOnGrokExit = partial.notifyOnGrokExit;
       }
+      if (typeof partial.notifyOnLongTask === "boolean") {
+        patch.notifyOnLongTask = partial.notifyOnLongTask;
+      }
+      if (partial.longTaskNotifyThresholdSec != null) {
+        patch.longTaskNotifyThresholdSec = partial.longTaskNotifyThresholdSec;
+      }
     }
     const next = persist(patch) || loadSettings(settingsFile());
     termFontSize = next.termFontSize;
@@ -3235,6 +3318,11 @@ function registerIpc() {
     copyOnSelect = next.copyOnSelect;
     termScrollback = next.termScrollback;
     notifyOnGrokExit = next.notifyOnGrokExit;
+    notifyOnLongTask = next.notifyOnLongTask;
+    longTaskNotifyThresholdSec = clampLongTaskThresholdSec(
+      next.longTaskNotifyThresholdSec,
+      DEFAULT_LONG_TASK_THRESHOLD_SEC,
+    );
     const snap = termHostSettingsSnapshot();
     sendToRenderer("app:term-settings", snap);
     return snap;

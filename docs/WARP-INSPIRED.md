@@ -12,7 +12,7 @@ Visual Capture for Grok is **not** a Warp clone. We host the **native Grok TUI**
 | Tab rename & reorder | Shell bootstrap / completers |
 | Settings for host prefs | Built-in coding agent (Grok is the agent) |
 | Command palette + shortcuts sheet | SSH / WSL / Warp Drive / cloud sync |
-| Optional copy-on-select & exit notifications | Theme marketplace |
+| Optional copy-on-select & desktop notifications (exit + long host task) | Theme marketplace |
 
 ## Shipped (v0.7.0)
 
@@ -29,7 +29,7 @@ Visual Capture for Grok is **not** a Warp clone. We host the **native Grok TUI**
 - **Copy on select** (settings, default off)
 - Terminal **context menu** (copy / find / open link)
 - **Scrollback** size setting (default 10k)
-- **OS notification** when session exits while unfocused
+- **OS notifications** (Warp macOS model): session exit + long capture/deliver (≥30s) while unfocused; click focuses app — see `docs/WARP-NOTIFICATIONS.md`
 - Lightweight **Settings** sheet (`⌘,`)
 
 ### Wave C — Discoverability

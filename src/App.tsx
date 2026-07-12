@@ -261,6 +261,9 @@ export default function App() {
   const [copyOnSelect, setCopyOnSelect] = useState(false);
   const [termScrollback, setTermScrollback] = useState(TERM_SCROLLBACK_DEFAULT);
   const [notifyOnGrokExit, setNotifyOnGrokExit] = useState(true);
+  const [notifyOnLongTask, setNotifyOnLongTask] = useState(true);
+  const [longTaskNotifyThresholdSec, setLongTaskNotifyThresholdSec] =
+    useState(30);
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState("");
   const [findCaseSensitive, setFindCaseSensitive] = useState(false);
@@ -403,6 +406,8 @@ export default function App() {
       copyOnSelect: boolean;
       termScrollback: number;
       notifyOnGrokExit: boolean;
+      notifyOnLongTask: boolean;
+      longTaskNotifyThresholdSec: number;
     }>,
   ) {
     if (!isElectron()) return;
@@ -420,6 +425,8 @@ export default function App() {
     copyOnSelect?: boolean;
     termScrollback?: number;
     notifyOnGrokExit?: boolean;
+    notifyOnLongTask?: boolean;
+    longTaskNotifyThresholdSec?: number;
   }) {
     if (typeof s.termFontSize === "number") {
       setTermFontSize(clampTermFontSize(s.termFontSize));
@@ -431,6 +438,12 @@ export default function App() {
     }
     if (typeof s.notifyOnGrokExit === "boolean") {
       setNotifyOnGrokExit(s.notifyOnGrokExit);
+    }
+    if (typeof s.notifyOnLongTask === "boolean") {
+      setNotifyOnLongTask(s.notifyOnLongTask);
+    }
+    if (typeof s.longTaskNotifyThresholdSec === "number") {
+      setLongTaskNotifyThresholdSec(s.longTaskNotifyThresholdSec);
     }
   }
 
@@ -855,6 +868,8 @@ export default function App() {
           copyOnSelect: s.copyOnSelect,
           termScrollback: s.termScrollback,
           notifyOnGrokExit: s.notifyOnGrokExit,
+          notifyOnLongTask: s.notifyOnLongTask,
+          longTaskNotifyThresholdSec: s.longTaskNotifyThresholdSec,
         });
 
         const saved = s.lastCapture || s.lastCaptureMeta;
@@ -1119,6 +1134,8 @@ export default function App() {
           copyOnSelect?: boolean;
           termScrollback?: number;
           notifyOnGrokExit?: boolean;
+          notifyOnLongTask?: boolean;
+          longTaskNotifyThresholdSec?: number;
         },
       );
     });
@@ -2874,6 +2891,37 @@ export default function App() {
                   }}
                 />
                 <span>{tr("settings.notifyOnGrokExit")}</span>
+              </label>
+              <label className="settings-row settings-check">
+                <input
+                  type="checkbox"
+                  checked={notifyOnLongTask}
+                  onChange={(e) => {
+                    setNotifyOnLongTask(e.target.checked);
+                    void persistTermSettings({
+                      notifyOnLongTask: e.target.checked,
+                    });
+                  }}
+                />
+                <span>{tr("settings.notifyOnLongTask")}</span>
+              </label>
+              <label className="settings-row">
+                <span>{tr("settings.longTaskThreshold")}</span>
+                <input
+                  type="number"
+                  min={5}
+                  max={600}
+                  step={5}
+                  value={longTaskNotifyThresholdSec}
+                  onChange={(e) => {
+                    const next = Number(e.target.value);
+                    if (!Number.isFinite(next)) return;
+                    setLongTaskNotifyThresholdSec(next);
+                    void persistTermSettings({
+                      longTaskNotifyThresholdSec: next,
+                    });
+                  }}
+                />
               </label>
             </div>
           </div>

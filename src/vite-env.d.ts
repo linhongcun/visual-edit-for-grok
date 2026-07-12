@@ -75,6 +75,8 @@ export interface VefgApi {
     copyOnSelect?: boolean;
     termScrollback?: number;
     notifyOnGrokExit?: boolean;
+    notifyOnLongTask?: boolean;
+    longTaskNotifyThresholdSec?: number;
   }>;
   navigate: (url: string) => Promise<{ ok: boolean; status?: PreviewStatus }>;
   reload: () => Promise<{ ok: boolean; status?: PreviewStatus }>;
@@ -134,12 +136,16 @@ export interface VefgApi {
     copyOnSelect?: boolean;
     termScrollback?: number;
     notifyOnGrokExit?: boolean;
+    notifyOnLongTask?: boolean;
+    longTaskNotifyThresholdSec?: number;
   }) => Promise<{
     termFontSize: number;
     linkTooltip: boolean;
     copyOnSelect: boolean;
     termScrollback: number;
     notifyOnGrokExit: boolean;
+    notifyOnLongTask: boolean;
+    longTaskNotifyThresholdSec: number;
   }>;
   copyDiagnostics: () => Promise<{ ok: boolean }>;
   stabilityProbe: (payload?: {

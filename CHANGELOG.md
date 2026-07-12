@@ -2,6 +2,17 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.8.3] — 2026-07-12
+
+### Desktop notifications aligned with Warp macOS model
+
+- Pure policy `electron/notify-policy.cjs`: notify only when window is **unfocused**
+- Keep **session exit** notifications (`notifyOnGrokExit`)
+- Add **long capture/deliver** notifications after default **30s** threshold (`notifyOnLongTask`, `longTaskNotifyThresholdSec`)
+- Clicking a notification focuses/restores the app window
+- Settings UI toggles + threshold; inventory `docs/WARP-NOTIFICATIONS.md`
+- Shell-block CLI completion remains out of scope (Grok owns the TUI)
+
 ## [0.8.2] — 2026-07-12
 
 ### Align Cmd+Backspace/Delete with Warp / macOS

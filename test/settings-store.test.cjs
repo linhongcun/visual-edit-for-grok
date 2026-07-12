@@ -95,6 +95,8 @@ function testRoundTrip() {
       copyOnSelect: DEFAULTS.copyOnSelect,
       termScrollback: DEFAULTS.termScrollback,
       notifyOnGrokExit: DEFAULTS.notifyOnGrokExit,
+      notifyOnLongTask: DEFAULTS.notifyOnLongTask,
+      longTaskNotifyThresholdSec: DEFAULTS.longTaskNotifyThresholdSec,
     });
   } finally {
     try {
@@ -271,18 +273,24 @@ function testTermHostSettingsNormalize() {
   assert.strictEqual(DEFAULTS.copyOnSelect, false);
   assert.strictEqual(DEFAULTS.termScrollback, 10000);
   assert.strictEqual(DEFAULTS.notifyOnGrokExit, true);
+  assert.strictEqual(DEFAULTS.notifyOnLongTask, true);
+  assert.strictEqual(DEFAULTS.longTaskNotifyThresholdSec, 30);
   const s = normalizeSettings({
     termFontSize: 99,
     linkTooltip: false,
     copyOnSelect: true,
     termScrollback: 50,
     notifyOnGrokExit: false,
+    notifyOnLongTask: false,
+    longTaskNotifyThresholdSec: 2,
   });
   assert.strictEqual(s.termFontSize, 22);
   assert.strictEqual(s.linkTooltip, false);
   assert.strictEqual(s.copyOnSelect, true);
   assert.strictEqual(s.termScrollback, 1000);
   assert.strictEqual(s.notifyOnGrokExit, false);
+  assert.strictEqual(s.notifyOnLongTask, false);
+  assert.strictEqual(s.longTaskNotifyThresholdSec, 5); // clamped min
   assert.strictEqual(s.settingsVersion, SETTINGS_VERSION);
 }
 

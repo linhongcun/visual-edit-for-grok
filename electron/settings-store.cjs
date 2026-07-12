@@ -18,8 +18,12 @@ const {
   TERM_FONT_SIZE_DEFAULT,
   TERM_SCROLLBACK_DEFAULT,
 } = require("./term-settings.cjs");
+const {
+  clampLongTaskThresholdSec,
+  DEFAULT_LONG_TASK_THRESHOLD_SEC,
+} = require("./notify-policy.cjs");
 
-const SETTINGS_VERSION = 3;
+const SETTINGS_VERSION = 4;
 const LEGACY_DEMO_URLS = new Set([
   "http://127.0.0.1:8765",
   "http://127.0.0.1:8765/",
@@ -53,8 +57,12 @@ const DEFAULTS = {
   copyOnSelect: false,
   /** xterm scrollback rows */
   termScrollback: TERM_SCROLLBACK_DEFAULT,
-  /** OS notification when Grok exits while app is in background */
+  /** OS notification when Grok/session exits while app is unfocused (Warp-inspired) */
   notifyOnGrokExit: true,
+  /** OS notification when long capture/deliver finishes while unfocused */
+  notifyOnLongTask: true,
+  /** Seconds of host work before long-task notify (Warp default 30s) */
+  longTaskNotifyThresholdSec: DEFAULT_LONG_TASK_THRESHOLD_SEC,
 };
 
 /**
@@ -147,6 +155,17 @@ function normalizeSettings(raw) {
     out.notifyOnGrokExit = o.notifyOnGrokExit;
   } else if (o.notifyOnGrokExit != null) {
     out.notifyOnGrokExit = asBoolean(o.notifyOnGrokExit, true);
+  }
+  if (typeof o.notifyOnLongTask === "boolean") {
+    out.notifyOnLongTask = o.notifyOnLongTask;
+  } else if (o.notifyOnLongTask != null) {
+    out.notifyOnLongTask = asBoolean(o.notifyOnLongTask, true);
+  }
+  if (o.longTaskNotifyThresholdSec != null) {
+    out.longTaskNotifyThresholdSec = clampLongTaskThresholdSec(
+      o.longTaskNotifyThresholdSec,
+      DEFAULT_LONG_TASK_THRESHOLD_SEC,
+    );
   }
   return out;
 }
