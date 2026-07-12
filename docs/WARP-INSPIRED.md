@@ -2,6 +2,8 @@
 
 Visual Capture for Grok is **not** a Warp clone. We host the **native Grok TUI** plus a secure browser preview. Ideas below come from studying the open Warp client (`warpdotdev/warp`) as a mature terminal host — **product patterns only**, never AGPL source.
 
+**macOS only:** this app targets Apple Silicon macOS. Warp input references use **macOS keybindings only** (⌘ / ⌥ chords). Do not port Warp’s Linux/Windows defaults unless the product expands platforms.
+
 ## Product boundary
 
 | Adopt | Reject |

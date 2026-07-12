@@ -2,6 +2,8 @@
 
 **Date:** 2026-07-12 · **Product boundary:** this app hosts **Grok TUI** as the agent composer. Warp’s defining input is a **first-party multiline editor + completer** (`app/src/terminal/input/*`, `crates/editor`). We do **not** reimplement that editor inside the PTY (AGPL ideas only).
 
+**Platform:** Visual Capture for Grok is **macOS-only**. When borrowing Warp input ideas, use **Warp’s macOS defaults only** (`with_mac_key_binding` / cmd-* / alt-*). Ignore Warp’s Linux/Windows bindings (`home`/`end` without cmd, `ctrl-backspace`, `ctrl-end`, etc.) unless we ship those platforms later.
+
 ## Surfaces
 
 | ID | Surface | Owner |
