@@ -151,6 +151,30 @@ function testFindEnterNextShiftPrev() {
   assert.strictEqual(resolveFindKeyAction({ key: "Escape" }), "none");
 }
 
+/**
+ * Regression: palette handlers must stop after one action (no double-fire).
+ * Pure policy returns a single action; UI must attach the handler once and
+ * stopPropagation on move/run (asserted structurally in App source).
+ */
+function testPaletteKeyActionIsSingleDispatch() {
+  const down = resolvePaletteKeyAction(
+    { key: "ArrowDown" },
+    { index: 0, itemCount: 3 },
+  );
+  assert.deepStrictEqual(down, { type: "move", index: 1 });
+  const run = resolvePaletteKeyAction(
+    { key: "Enter" },
+    { index: 1, itemCount: 3 },
+  );
+  assert.deepStrictEqual(run, { type: "run", index: 1 });
+  // Calling the pure resolver twice is independent — double-fire is a UI bug
+  // when the same event hits two listeners; unit contract is one action/event.
+  assert.deepStrictEqual(
+    resolvePaletteKeyAction({ key: "Enter" }, { index: 1, itemCount: 3 }),
+    { type: "run", index: 1 },
+  );
+}
+
 function testPaletteArrowClampAndRun() {
   assert.strictEqual(clampPaletteIndex(-1, 3), 0);
   assert.strictEqual(clampPaletteIndex(99, 3), 2);
@@ -204,6 +228,7 @@ function run() {
     testFocusedChromeEscDefersToAim,
     testUrlEnterSubmitShiftEnterNone,
     testFindEnterNextShiftPrev,
+    testPaletteKeyActionIsSingleDispatch,
     testPaletteArrowClampAndRun,
   ];
   let failed = 0;

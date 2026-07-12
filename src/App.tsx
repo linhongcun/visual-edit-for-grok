@@ -1743,6 +1743,10 @@ export default function App() {
     paletteVisible.length,
   );
 
+  /**
+   * Palette keyboard handler — attach to the filter input ONLY (not the dialog).
+   * Always stopPropagation on handled keys so Enter/arrows never fire twice.
+   */
   function onPaletteKeyDown(e: ReactKeyboardEvent<HTMLElement>) {
     if (e.key === "Escape") {
       const action = resolveFocusedChromeEscape(
@@ -1765,11 +1769,13 @@ export default function App() {
     });
     if (action.type === "move" && typeof action.index === "number") {
       e.preventDefault();
+      e.stopPropagation();
       setPaletteIndex(action.index);
       return;
     }
     if (action.type === "run" && typeof action.index === "number") {
       e.preventDefault();
+      e.stopPropagation();
       const item = paletteVisible[action.index];
       if (!item) return;
       const full = paletteCommands.find((c) => c.id === item.id);
@@ -2876,7 +2882,6 @@ export default function App() {
             role="dialog"
             aria-label={tr("palette.title")}
             onClick={(e) => e.stopPropagation()}
-            onKeyDown={onPaletteKeyDown}
           >
             <div className="palette-input-row chrome-field is-focused">
               <input

@@ -2,6 +2,13 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.7.6] — 2026-07-12
+
+### Fix palette Enter double-fire
+
+- Attach palette keyboard handler only on the filter input (not also the dialog)
+- `stopPropagation` on move/run so Enter cannot open two tabs / toggle twice
+
 ## [0.7.5] — 2026-07-12
 
 ### Chrome input keyboard contracts (Warp-inspired)
