@@ -42,3 +42,4 @@ export const SEQ_LINE_END: string;
 export const SEQ_BUFFER_START: string;
 export const SEQ_BUFFER_END: string;
 export const SEQ_WORD_DELETE_FORWARD: string;
+export const SEQ_CLEAR_CURRENT_LINE: string;

@@ -105,7 +105,7 @@ xterm.js gaps + Warp-inspired macOS edit chords, pure encoder `src/terminal-key-
 | ⇧Enter | ESC+CR | Newline (stock xterm = bare CR) |
 | ⌃Enter | Kitty CSI-u | Interject |
 | ⌘A | Kitty Super+A | Select all (needs `TERM_PROGRAM=ghostty`) |
-| ⌘⌫ / ⌘⌦ | Super+A + DEL | Clear whole composer |
+| ⌘⌫ / ⌘⌦ | Ctrl+A + Ctrl+K | Clear **current** line only |
 | ⌘← / ⌘→ | Ctrl+A / Ctrl+E | Line start / end |
 | ⌘↑ / ⌘↓ | Ctrl+Home / Ctrl+End | Buffer start / end |
 | ⌥⌦ | ESC d | Forward word delete |

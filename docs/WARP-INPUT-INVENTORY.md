@@ -37,7 +37,7 @@
 | Completions / slash / history menus | O | out-of-scope | Warp product surface |
 | Image / file attachment chips | H | partial | Capture paste path; not Warp chips |
 | Select all (Cmd+A) | H | done (0.7.9) | Super+A + `TERM_PROGRAM=ghostty` |
-| Clear whole prompt (Cmd+Backspace/Delete) | H | done (0.7.9) | Super+A + DEL (product: full clear; Warp splits left/right kill) |
+| Clear current line (Cmd+Backspace/Delete) | H | done (0.8.1) | Ctrl+A + Ctrl+K — current line only (0.7.9 Super+A+DEL wiped whole buffer; fixed) |
 | Word left/right (Opt+←/→) | H | stock xterm | ESC b / ESC f on macOS |
 | Word delete left (Opt+Backspace) | H | stock xterm | ESC+DEL |
 | Word delete right (Opt+Delete) | H | done (0.8.0) | ESC d (readline kill-word-forward) |
@@ -63,8 +63,8 @@ From `app/src/editor/view/mod.rs` (product mapping only):
 | `cmd-down` | CmdDown (buffer bottom) | `\x1b[1;5F` (Ctrl+End) |
 | `alt-delete` | DeleteWordRight | `\x1bd` (ESC d) |
 | `alt-backspace` | DeleteWordLeft | stock xterm |
-| `cmd-backspace` | DeleteAllLeft | **product override**: full clear (0.7.9) |
-| `cmd-delete` | DeleteAllRight | **product override**: full clear (0.7.9) |
+| `cmd-backspace` | DeleteAllLeft | **product**: clear current line via Ctrl+A+Ctrl+K (0.8.1) |
+| `cmd-delete` | DeleteAllRight | same current-line clear (0.8.1); not whole-buffer |
 | `ctrl-a` / `ctrl-e` | line start/end | stock (Grok / shell) |
 
 ## xterm.js gaps (why host remaps exist)

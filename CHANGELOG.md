@@ -2,6 +2,15 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.8.1] — 2026-07-12
+
+### Fix Cmd+Backspace/Delete: clear current line only
+
+- Was Super+A + DEL → wiped the **entire** multiline Grok composer
+- Now Ctrl+A + Ctrl+K → clear **only the line under the cursor**
+- Other lines of multi-line input are preserved
+- Unit tests assert not using select-all sequence
+
 ## [0.8.0] — 2026-07-12
 
 ### Warp-inspired Grok host input chords (full inventory pass)

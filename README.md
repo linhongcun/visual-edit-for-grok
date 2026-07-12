@@ -1,6 +1,6 @@
 # Visual Capture for Grok
 
-**Version 0.8.0** · macOS (Apple Silicon)
+**Version 0.8.1** · macOS (Apple Silicon)
 
 Side-by-side workbench: **left = native Grok Build TUI**, **right = website preview**.  
 **Aim** or **Frame** a UI → the app attempts an image paste + grounded DOM-context write in Grok’s PTY. If Grok is not running, text + image stay on the clipboard.
@@ -28,7 +28,7 @@ image chip. Verify the prompt before submitting.
 |----------|----------|
 | **Installed app** | `/Applications/Visual Capture for Grok.app` |
 | **Built `.app`** | `release/mac-arm64/Visual Capture for Grok.app` |
-| **DMG** | `release/Visual-Capture-for-Grok-0.8.0-arm64.dmg` |
+| **DMG** | `release/Visual-Capture-for-Grok-0.8.1-arm64.dmg` |
 
 Download the current installer from [GitHub Releases](https://github.com/linhongcun/visual-edit-for-grok/releases).
 

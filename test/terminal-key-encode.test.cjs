@@ -13,6 +13,7 @@ const {
   SEQ_BUFFER_START,
   SEQ_BUFFER_END,
   SEQ_WORD_DELETE_FORWARD,
+  SEQ_CLEAR_CURRENT_LINE,
 } = require("../src/terminal-key-encode.cjs");
 
 function testPlainEnterPassthrough() {
@@ -43,7 +44,7 @@ function testShiftEnterKeypressSwallows() {
   assert.strictEqual(r.action, "swallow");
 }
 
-function testCmdBackspaceClearsViaSelectAllDelete() {
+function testCmdBackspaceClearsCurrentLineOnly() {
   const r = resolveGrokHostKey({
     type: "keydown",
     key: "Backspace",
@@ -52,8 +53,10 @@ function testCmdBackspaceClearsViaSelectAllDelete() {
   assert.ok(r);
   assert.strictEqual(r.action, "write");
   assert.strictEqual(r.reason, "cmd-backspace-clear-line");
-  // Super+A then DEL
-  assert.strictEqual(
+  // Ctrl+A + Ctrl+K — current line only, not Super+A (whole buffer)
+  assert.strictEqual(r.sequence, SEQ_CLEAR_CURRENT_LINE);
+  assert.strictEqual(r.sequence, "\x01\x0b");
+  assert.notStrictEqual(
     r.sequence,
     `\x1b[${KITTY_KEY_A};${KITTY_MOD_SUPER}u\x7f`,
   );
@@ -68,6 +71,7 @@ function testCmdDeleteSameAsCmdBackspace() {
   assert.ok(r);
   assert.strictEqual(r.action, "write");
   assert.strictEqual(r.reason, "cmd-backspace-clear-line");
+  assert.strictEqual(r.sequence, SEQ_CLEAR_CURRENT_LINE);
 }
 
 function testCmdBackspaceKeypressSwallows() {
@@ -256,7 +260,7 @@ function run() {
     testPlainEnterPassthrough,
     testShiftEnterKeydownWritesEscCr,
     testShiftEnterKeypressSwallows,
-    testCmdBackspaceClearsViaSelectAllDelete,
+    testCmdBackspaceClearsCurrentLineOnly,
     testCmdDeleteSameAsCmdBackspace,
     testCmdBackspaceKeypressSwallows,
     testCmdASelectAll,
