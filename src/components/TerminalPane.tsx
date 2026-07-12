@@ -87,6 +87,29 @@ export default function TerminalPane({
     onOpenHttpUrlExternalRef.current = onOpenHttpUrlExternal;
   }, [onOpenHttpUrlExternal]);
 
+  /**
+   * Shared open path for WebLinksAddon (regex URLs) and OSC 8 linkHandler.
+   * Without linkHandler, xterm OscLinkProvider shows confirm() + window.open
+   * (denied by our main-window setWindowOpenHandler) — the regression dialog.
+   */
+  function openTerminalHttpUrl(uri: string, event?: MouseEvent | null) {
+    const target = resolveTerminalLinkTarget(uri, event);
+    if (target === "preview" && onOpenHttpUrlRef.current) {
+      onOpenHttpUrlRef.current(uri);
+      return;
+    }
+    if (target === "system") {
+      void window.vefg
+        ?.openExternal(uri)
+        .then(() => {
+          onOpenHttpUrlExternalRef.current?.(uri);
+        })
+        .catch(() => {
+          // Main validates schemes and owns the native browser handoff.
+        });
+    }
+  }
+
   function clearFocusTimer() {
     if (focusTimerRef.current != null) {
       window.clearTimeout(focusTimerRef.current);
@@ -219,6 +242,14 @@ export default function TerminalPane({
       smoothScrollDuration: 0,
       // Restored: reduces “broken” table border / CJK overlap artifacts
       rescaleOverlappingGlyphs: true,
+      // OSC 8 hyperlinks (Grok writes these). Default = confirm() + window.open.
+      linkHandler: {
+        activate: (event, uri) => {
+          openTerminalHttpUrl(uri, event);
+        },
+        // http(s) only — matches main shell:open-external allowlist
+        allowNonHttpProtocols: false,
+      },
     });
 
     const fit = new FitAddon();
@@ -227,25 +258,10 @@ export default function TerminalPane({
     const unicode11 = new Unicode11Addon();
     term.loadAddon(unicode11);
     term.unicode.activeVersion = "11";
+    // Plain-text URL regex (non-OSC-8). OSC 8 uses Terminal.linkHandler above.
     term.loadAddon(
       new WebLinksAddon((event, uri) => {
-        // Plain click → right preview; ⌘/Ctrl+click → macOS default browser
-        const target = resolveTerminalLinkTarget(uri, event);
-        if (target === "preview" && onOpenHttpUrlRef.current) {
-          onOpenHttpUrlRef.current(uri);
-          return;
-        }
-        if (target === "system") {
-          void window.vefg
-            .openExternal(uri)
-            .then(() => {
-              onOpenHttpUrlExternalRef.current?.(uri);
-            })
-            .catch(() => {
-              // Main validates schemes and owns the native browser handoff.
-            });
-          return;
-        }
+        openTerminalHttpUrl(uri, event);
       }),
     );
     term.open(hostRef.current);

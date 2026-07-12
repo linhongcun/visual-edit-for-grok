@@ -2,6 +2,14 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.6.11] — 2026-07-12
+
+### Fix OSC 8 link click → in-app preview (no warning dialog)
+
+- Grok emits **OSC 8** hyperlinks; xterm’s default `OscLinkProvider` used `confirm()` + `window.open`
+- That produced the “WARNING: This link could potentially be dangerous” dialog, and `window.open` is denied by the main window — so the preview never navigated
+- Set Terminal `linkHandler` to the same policy as WebLinksAddon: plain click → preview, ⌘/Ctrl+click → system browser
+
 ## [0.6.10] — 2026-07-12
 
 ### Terminal link open policy
