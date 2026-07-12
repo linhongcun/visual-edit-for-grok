@@ -17,7 +17,7 @@ import {
   TERM_FONT_SIZE_DEFAULT,
   TERM_SCROLLBACK_DEFAULT,
 } from "../term-settings.cjs";
-import { encodeModifiedEnterForGrok } from "../terminal-key-encode.cjs";
+import { resolveModifiedEnterForGrok } from "../terminal-key-encode.cjs";
 import "@xterm/xterm/css/xterm.css";
 
 /**
@@ -700,19 +700,29 @@ export default function TerminalPane({
 
     /**
      * Grok TUI: Shift+Enter = newline, Enter = send.
-     * Stock xterm.js encodes both as bare CR, so Grok cannot tell them apart
-     * (same class of bug as VS Code's integrated terminal). Remap Shift+Enter
-     * to ESC+CR (identical to Alt+Enter, which Grok already accepts).
-     * Ctrl+Enter → Kitty CSI-u for mid-turn interject when supported.
+     * Stock xterm.js encodes both as bare CR on keydown. We remap Shift+Enter
+     * to ESC+CR (same as Alt+Enter). Also swallow the following keypress/keyup
+     * — otherwise xterm still emits bare CR after our write and Grok submits
+     * (user: Alt+Enter works, Shift+Enter still sends).
      */
     term.attachCustomKeyEventHandler((ev) => {
-      const encoded = encodeModifiedEnterForGrok(ev);
-      if (!encoded) return true;
-      // Swallow default CR; write the Grok-distinguishable sequence once.
-      void window.vefg.terminalWrite({
-        data: encoded.sequence,
-        sessionId: sessionIdRef.current,
-      });
+      const resolved = resolveModifiedEnterForGrok(ev);
+      if (!resolved) return true;
+      // Always cancel DOM default for write *and* swallow — otherwise keypress
+      // still emits bare CR after a keydown remapping.
+      try {
+        ev.preventDefault?.();
+        ev.stopPropagation?.();
+      } catch {
+        /* ignore */
+      }
+      if (resolved.action === "write") {
+        void window.vefg.terminalWrite({
+          data: resolved.sequence,
+          sessionId: sessionIdRef.current,
+        });
+      }
+      // false = do not let xterm handle this event
       return false;
     });
 

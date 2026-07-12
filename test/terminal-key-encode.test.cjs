@@ -5,32 +5,54 @@
 const assert = require("assert");
 const {
   encodeModifiedEnterForGrok,
+  resolveModifiedEnterForGrok,
 } = require("../src/terminal-key-encode.cjs");
 
 function testPlainEnterPassthrough() {
   assert.strictEqual(
-    encodeModifiedEnterForGrok({ type: "keydown", key: "Enter" }),
+    resolveModifiedEnterForGrok({ type: "keydown", key: "Enter" }),
     null,
   );
 }
 
-function testShiftEnterIsEscCrNewline() {
-  const r = encodeModifiedEnterForGrok({
+function testShiftEnterKeydownWritesEscCr() {
+  const r = resolveModifiedEnterForGrok({
     type: "keydown",
     key: "Enter",
     shiftKey: true,
   });
   assert.ok(r);
+  assert.strictEqual(r.action, "write");
   assert.strictEqual(r.sequence, "\x1b\r");
   assert.strictEqual(r.reason, "shift-enter-newline");
-  // Same bytes Grok already accepts for Alt+Enter on xterm.js
-  assert.strictEqual(r.sequence, "\x1b" + "\r");
+}
+
+function testShiftEnterKeypressSwallowsWithoutWrite() {
+  // Regression: if keypress is not swallowed, xterm emits bare CR after our
+  // ESC+CR and Grok submits the message (user report: Alt+Enter OK, Shift+Enter not).
+  const r = resolveModifiedEnterForGrok({
+    type: "keypress",
+    key: "Enter",
+    shiftKey: true,
+  });
+  assert.ok(r);
+  assert.strictEqual(r.action, "swallow");
+  assert.strictEqual(r.sequence, undefined);
+}
+
+function testShiftEnterKeyupSwallows() {
+  const r = resolveModifiedEnterForGrok({
+    type: "keyup",
+    key: "Enter",
+    shiftKey: true,
+  });
+  assert.ok(r);
+  assert.strictEqual(r.action, "swallow");
 }
 
 function testAltEnterLeftToXtermDefault() {
-  // Stock xterm already emits ESC+CR for Alt+Enter — do not double-send.
   assert.strictEqual(
-    encodeModifiedEnterForGrok({
+    resolveModifiedEnterForGrok({
       type: "keydown",
       key: "Enter",
       altKey: true,
@@ -40,58 +62,54 @@ function testAltEnterLeftToXtermDefault() {
 }
 
 function testCtrlEnterKittyCsiU() {
-  const r = encodeModifiedEnterForGrok({
+  const r = resolveModifiedEnterForGrok({
     type: "keydown",
     key: "Enter",
     ctrlKey: true,
   });
   assert.ok(r);
+  assert.strictEqual(r.action, "write");
   assert.strictEqual(r.sequence, "\x1b[13;5u");
-  assert.strictEqual(r.reason, "ctrl-enter-interject");
 }
 
-function testKeyupIgnored() {
-  assert.strictEqual(
-    encodeModifiedEnterForGrok({
-      type: "keyup",
-      key: "Enter",
-      shiftKey: true,
-    }),
-    null,
-  );
+function testCtrlEnterKeypressSwallows() {
+  const r = resolveModifiedEnterForGrok({
+    type: "keypress",
+    key: "Enter",
+    ctrlKey: true,
+  });
+  assert.ok(r);
+  assert.strictEqual(r.action, "swallow");
 }
 
-function testShiftCtrlEnterIgnored() {
-  assert.strictEqual(
+function testEncodeCompatOnlyKeydownWrite() {
+  assert.ok(
     encodeModifiedEnterForGrok({
       type: "keydown",
       key: "Enter",
       shiftKey: true,
-      ctrlKey: true,
+    }),
+  );
+  assert.strictEqual(
+    encodeModifiedEnterForGrok({
+      type: "keypress",
+      key: "Enter",
+      shiftKey: true,
     }),
     null,
   );
-}
-
-function testKeyCode13ShiftWorks() {
-  const r = encodeModifiedEnterForGrok({
-    type: "keydown",
-    keyCode: 13,
-    shiftKey: true,
-  });
-  assert.ok(r);
-  assert.strictEqual(r.sequence, "\x1b\r");
 }
 
 function run() {
   const tests = [
     testPlainEnterPassthrough,
-    testShiftEnterIsEscCrNewline,
+    testShiftEnterKeydownWritesEscCr,
+    testShiftEnterKeypressSwallowsWithoutWrite,
+    testShiftEnterKeyupSwallows,
     testAltEnterLeftToXtermDefault,
     testCtrlEnterKittyCsiU,
-    testKeyupIgnored,
-    testShiftCtrlEnterIgnored,
-    testKeyCode13ShiftWorks,
+    testCtrlEnterKeypressSwallows,
+    testEncodeCompatOnlyKeydownWrite,
   ];
   let failed = 0;
   for (const t of tests) {

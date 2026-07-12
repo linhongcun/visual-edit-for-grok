@@ -2,6 +2,14 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.7.8] — 2026-07-12
+
+### Fix Shift+Enter still submitting in Grok (keypress bare CR)
+
+- Root cause: after remapping Shift+Enter on **keydown**, xterm still processed **keypress** and emitted bare CR, so Grok saw newline+send
+- Swallow keypress/keyup for Shift+Enter and Ctrl+Enter; only write the sequence once on keydown
+- Matches user report: Alt+Enter worked, Shift+Enter still sent
+
 ## [0.7.7] — 2026-07-12
 
 ### Fix Grok TUI Shift+Enter newline in embedded xterm
