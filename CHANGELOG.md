@@ -2,6 +2,14 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.8.13] — 2026-07-12
+
+### Palot-inspired notification cooldown + inventory
+
+- Per-key desktop notify cooldown (default 30s, kind+scope) so rapid Grok exits / long-tasks do not spam OS notifications while unfocused
+- Pure helpers: `planDesktopNotification`, `evaluateNotifyCooldown`, `planBackoffDelayMs`; inventory `docs/PALOT-INVENTORY.md`
+- Out of scope: OpenCode chat IDE, RRule automations, migration wizard, mDNS, tray shell, source copy
+
 ## [0.8.12] — 2026-07-12
 
 ### Fix Wave maximize persist + preview crash recovery

@@ -88,10 +88,14 @@ const {
   shouldConfirmQuit,
 } = require("./operator-guidance.cjs");
 const {
-  shouldShowDesktopNotification,
+  planDesktopNotification,
+  notifyCooldownKey,
   clampLongTaskThresholdSec,
   DEFAULT_LONG_TASK_THRESHOLD_SEC,
+  DEFAULT_NOTIFY_COOLDOWN_MS,
 } = require("./notify-policy.cjs");
+/** Palot-inspired: last OS notification fire time per kind+scope (ms). */
+const notifyLastShown = new Map();
 const {
   shouldHideScrollbarsForCapture,
   HIDE_SCROLLBAR_CSS,
@@ -283,14 +287,25 @@ function termHostSettingsSnapshot() {
 }
 
 /**
- * Warp-style desktop notification: only when policy allows; click focuses app.
- * @param {{ kind: "session-exit" | "long-task", title: string, body: string, durationMs?: number }} opts
+ * Warp + Palot-style desktop notification: base gates + per-key cooldown;
+ * click focuses app.
+ * @param {{
+ *   kind: "session-exit" | "long-task",
+ *   title: string,
+ *   body: string,
+ *   durationMs?: number,
+ *   scope?: string,
+ *   sessionId?: string,
+ * }} opts
  */
 function maybeShowDesktopNotification(opts) {
   const windowFocused = Boolean(
     mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused(),
   );
-  const decision = shouldShowDesktopNotification({
+  const scope = opts.scope || opts.sessionId || "app";
+  const mapKey = notifyCooldownKey(opts.kind, scope);
+  const lastShownAt = notifyLastShown.get(mapKey) || 0;
+  const decision = planDesktopNotification({
     kind: opts.kind,
     windowFocused,
     osSupported: Notification.isSupported(),
@@ -298,6 +313,11 @@ function maybeShowDesktopNotification(opts) {
     notifyOnLongTask,
     durationMs: opts.durationMs,
     longTaskThresholdSec: longTaskNotifyThresholdSec,
+    scope,
+    sessionId: opts.sessionId,
+    lastShownAt,
+    now: Date.now(),
+    cooldownMs: DEFAULT_NOTIFY_COOLDOWN_MS,
   });
   if (!decision.show) return decision;
   try {
@@ -316,6 +336,9 @@ function maybeShowDesktopNotification(opts) {
       }
     });
     n.show();
+    if (decision.recordShown && decision.cooldownKey) {
+      notifyLastShown.set(decision.cooldownKey, Date.now());
+    }
   } catch {
     /* best-effort */
   }
@@ -625,6 +648,7 @@ async function withCaptureLock(fn, opts = {}) {
       maybeShowDesktopNotification({
         kind: "long-task",
         durationMs,
+        scope: "capture",
         title: tr("notify.longTaskTitle"),
         body: tr("notify.longTaskBody", {
           seconds: String(Math.max(1, Math.round(durationMs / 1000))),
@@ -3277,6 +3301,8 @@ function createTerminalSlot(opts = {}) {
           const label = meta.label || meta.cwd || "Terminal";
           maybeShowDesktopNotification({
             kind: "session-exit",
+            sessionId: meta.id,
+            scope: meta.id,
             title: tr("notify.grokExitTitle"),
             body: tr("notify.grokExitBody", {
               tab: label,
