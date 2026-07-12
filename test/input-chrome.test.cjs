@@ -9,6 +9,7 @@ const {
   filterPaletteItems,
   paletteItemMatches,
   resolveEscapeAction,
+  resolveFocusedChromeEscape,
   normalizeUrlInputValue,
 } = require("../src/input-chrome.cjs");
 
@@ -110,6 +111,19 @@ function testNormalizeUrlInputValue() {
   assert.strictEqual(normalizeUrlInputValue(null), "");
 }
 
+function testFocusedChromeEscDefersToAim() {
+  // Local surface handlers must use this so Aim cancel wins over close/blur.
+  assert.strictEqual(resolveFocusedChromeEscape("url", true), "aim-cancel");
+  assert.strictEqual(resolveFocusedChromeEscape("find", true), "aim-cancel");
+  assert.strictEqual(resolveFocusedChromeEscape("palette", true), "aim-cancel");
+  assert.strictEqual(resolveFocusedChromeEscape("url", false), "blur-url");
+  assert.strictEqual(resolveFocusedChromeEscape("find", false), "close-find");
+  assert.strictEqual(
+    resolveFocusedChromeEscape("palette", false),
+    "close-palette",
+  );
+}
+
 function run() {
   const tests = [
     testShouldShowUrlClear,
@@ -121,6 +135,7 @@ function run() {
     testEscapeOrderAimWins,
     testEscapeOrderFindThenPaletteThenUrl,
     testNormalizeUrlInputValue,
+    testFocusedChromeEscDefersToAim,
   ];
   let failed = 0;
   for (const t of tests) {

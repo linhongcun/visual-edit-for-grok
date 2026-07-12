@@ -35,6 +35,7 @@ import {
   filterRecentUrls,
   filterPaletteItems,
   resolveEscapeAction,
+  resolveFocusedChromeEscape,
   normalizeUrlInputValue,
 } from "./input-chrome.cjs";
 import type {
@@ -1713,12 +1714,20 @@ export default function App() {
         onFocus={() => setUrlFocused(true)}
         onBlur={() => setUrlFocused(false)}
         onKeyDown={(e) => {
-          if (e.key === "Escape") {
-            e.preventDefault();
-            e.stopPropagation();
-            (e.target as HTMLInputElement).blur();
-            focusGrokTerminal();
+          if (e.key !== "Escape") return;
+          // Aim pickMode always wins over URL blur (do not swallow Esc).
+          const action = resolveFocusedChromeEscape(
+            "url",
+            pickModeRef.current,
+          );
+          e.preventDefault();
+          e.stopPropagation();
+          if (action === "aim-cancel") {
+            void window.vefg?.setPickMode(false);
+            return;
           }
+          (e.target as HTMLInputElement).blur();
+          focusGrokTerminal();
         }}
         placeholder={tr("nav.urlPlaceholder")}
         spellCheck={false}
@@ -2482,6 +2491,10 @@ export default function App() {
             caseSensitive={findCaseSensitive}
             resultIndex={findResultIndex}
             resultCount={findResultCount}
+            pickMode={pickMode}
+            onAimCancel={() => {
+              void window.vefg?.setPickMode(false);
+            }}
             onQueryChange={(q) => {
               setFindQuery(q);
               findQueryRef.current = q;
@@ -2742,12 +2755,19 @@ export default function App() {
             aria-label={tr("palette.title")}
             onClick={(e) => e.stopPropagation()}
             onKeyDown={(e) => {
-              if (e.key === "Escape") {
-                e.preventDefault();
-                e.stopPropagation();
-                setPaletteOpen(false);
-                focusGrokTerminal();
+              if (e.key !== "Escape") return;
+              const action = resolveFocusedChromeEscape(
+                "palette",
+                pickModeRef.current,
+              );
+              e.preventDefault();
+              e.stopPropagation();
+              if (action === "aim-cancel") {
+                void window.vefg?.setPickMode(false);
+                return;
               }
+              setPaletteOpen(false);
+              focusGrokTerminal();
             }}
           >
             <div className="palette-input-row chrome-field is-focused">
@@ -2762,12 +2782,19 @@ export default function App() {
                 aria-label={tr("palette.placeholder")}
                 enterKeyHint="go"
                 onKeyDown={(e) => {
-                  if (e.key === "Escape") {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setPaletteOpen(false);
-                    focusGrokTerminal();
+                  if (e.key !== "Escape") return;
+                  const action = resolveFocusedChromeEscape(
+                    "palette",
+                    pickModeRef.current,
+                  );
+                  e.preventDefault();
+                  e.stopPropagation();
+                  if (action === "aim-cancel") {
+                    void window.vefg?.setPickMode(false);
+                    return;
                   }
+                  setPaletteOpen(false);
+                  focusGrokTerminal();
                 }}
               />
               {shouldShowUrlClear(paletteQuery) ? (

@@ -2,6 +2,13 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.7.4] — 2026-07-12
+
+### Fix Esc priority: Aim cancel wins over chrome inputs
+
+- URL / find / palette local Esc handlers use `resolveFocusedChromeEscape` so pickMode Aim cancel is never swallowed by blur/close
+- Unit coverage for focused-surface Esc policy
+
 ## [0.7.3] — 2026-07-12
 
 ### Warp-inspired chrome input polish

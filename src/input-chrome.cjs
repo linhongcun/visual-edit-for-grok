@@ -125,11 +125,31 @@ function normalizeUrlInputValue(value) {
   return String(value ?? "").trim();
 }
 
+/**
+ * Esc action for a chrome surface that currently has keyboard focus.
+ * Local handlers MUST call this so Aim pickMode always wins over close/blur.
+ *
+ * @param {"url"|"find"|"palette"|"settings"|"shortcuts"} surface
+ * @param {boolean} [pickMode]
+ * @returns {ReturnType<typeof resolveEscapeAction>}
+ */
+function resolveFocusedChromeEscape(surface, pickMode = false) {
+  return resolveEscapeAction({
+    pickMode: Boolean(pickMode),
+    findOpen: surface === "find",
+    paletteOpen: surface === "palette",
+    settingsOpen: surface === "settings",
+    shortcutsOpen: surface === "shortcuts",
+    urlFocused: surface === "url",
+  });
+}
+
 module.exports = {
   shouldShowUrlClear,
   filterRecentUrls,
   paletteItemMatches,
   filterPaletteItems,
   resolveEscapeAction,
+  resolveFocusedChromeEscape,
   normalizeUrlInputValue,
 };

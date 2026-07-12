@@ -32,4 +32,16 @@ export function resolveEscapeAction(state?: {
   | "blur-url"
   | "none";
 
+export function resolveFocusedChromeEscape(
+  surface: "url" | "find" | "palette" | "settings" | "shortcuts",
+  pickMode?: boolean,
+):
+  | "aim-cancel"
+  | "close-find"
+  | "close-palette"
+  | "close-settings"
+  | "close-shortcuts"
+  | "blur-url"
+  | "none";
+
 export function normalizeUrlInputValue(value: unknown): string;

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { resolveFocusedChromeEscape } from "../input-chrome.cjs";
 
 export interface TerminalFindBarProps {
   open: boolean;
@@ -6,11 +7,15 @@ export interface TerminalFindBarProps {
   caseSensitive: boolean;
   resultIndex: number;
   resultCount: number;
+  /** When true, Esc cancels Aim instead of closing find */
+  pickMode?: boolean;
   onQueryChange: (query: string) => void;
   onCaseSensitiveChange: (value: boolean) => void;
   onFindNext: () => void;
   onFindPrevious: () => void;
   onClose: () => void;
+  /** Cancel Aim pick mode (used when Esc priority is aim-cancel) */
+  onAimCancel?: () => void;
   labels: {
     placeholder: string;
     next: string;
@@ -32,11 +37,13 @@ export default function TerminalFindBar({
   caseSensitive,
   resultIndex,
   resultCount,
+  pickMode = false,
   onQueryChange,
   onCaseSensitiveChange,
   onFindNext,
   onFindPrevious,
   onClose,
+  onAimCancel,
   labels,
 }: TerminalFindBarProps) {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -68,8 +75,14 @@ export default function TerminalFindBar({
       aria-label={labels.placeholder}
       onKeyDown={(e) => {
         if (e.key === "Escape") {
+          // Aim pickMode always wins over close-find (shared escape policy).
+          const action = resolveFocusedChromeEscape("find", pickMode);
           e.preventDefault();
           e.stopPropagation();
+          if (action === "aim-cancel") {
+            onAimCancel?.();
+            return;
+          }
           onClose();
           return;
         }
