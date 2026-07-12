@@ -2,15 +2,163 @@
  * Production-oriented stability helpers for the main process.
  * Pure (no Electron imports) — unit-tested, required by main + diagnostics.
  *
- * Warp-inspired ideas (reimplemented, no AGPL code):
- * - Classify expected vs actionable failures
- * - Privacy-safe recent-error ring buffer
- * - Once-per-run throttle to avoid flooding the buffer
+ * Ideas (reimplemented, no source copy):
+ * - Warp / prior: expected vs actionable, privacy-safe ring, once-per-run
+ * - agent-browser: op timeouts, doctor-style health summary
+ * - browser-use: hang/crash watchdog spirit (timeout + crash report codes)
+ * - playwright-mcp: isolation + scrubbed operator-facing diagnostics
  */
 
 const { sanitizeErrorText, sanitizeDiagnosticUrl } = require("./diagnostics.cjs");
 
 const DEFAULT_RING_SIZE = 30;
+/** Default host op timeout (browser-use CDP / agent-browser tool spirit). */
+const DEFAULT_OP_TIMEOUT_MS = 30_000;
+const MIN_OP_TIMEOUT_MS = 1_000;
+const MAX_OP_TIMEOUT_MS = 180_000;
+
+/**
+ * @param {unknown} value
+ * @param {number} [fallback]
+ * @returns {number}
+ */
+function clampOpTimeoutMs(value, fallback = DEFAULT_OP_TIMEOUT_MS) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(MAX_OP_TIMEOUT_MS, Math.max(MIN_OP_TIMEOUT_MS, Math.round(n)));
+}
+
+/**
+ * Race a promise against a timeout so host ops cannot hang forever
+ * (browser-use TimeoutWrappedCDPClient / agent-browser tool timeout spirit).
+ *
+ * @template T
+ * @param {Promise<T>} promise
+ * @param {number} [ms]
+ * @param {{ code?: string, label?: string }} [opts]
+ * @returns {Promise<T>}
+ */
+function withTimeout(promise, ms, opts = {}) {
+  const timeoutMs = clampOpTimeoutMs(ms, DEFAULT_OP_TIMEOUT_MS);
+  const code = String(opts.code || "op-timeout").slice(0, 80);
+  const label = String(opts.label || "operation").slice(0, 120);
+  let timer = null;
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const err = new Error(
+        `${label} timed out after ${timeoutMs}ms`,
+      );
+      err.name = "TimeoutError";
+      err.code = code;
+      reject(err);
+    }, timeoutMs);
+    // Do not unref: unit tests and short-lived scripts must still fire timeouts.
+  });
+  return Promise.race([
+    Promise.resolve(promise).finally(() => {
+      if (timer) clearTimeout(timer);
+    }),
+    timeoutPromise,
+  ]);
+}
+
+/**
+ * Doctor-style health snapshot for diagnostics (agent-browser doctor spirit).
+ * Pure: only formats inputs provided by main.
+ *
+ * @param {{
+ *   previewOk?: boolean,
+ *   previewLoading?: boolean,
+ *   previewError?: string | null,
+ *   previewDestroyed?: boolean,
+ *   sessionCount?: number,
+ *   grokRunningCount?: number,
+ *   shellAliveCount?: number,
+ *   faultRingSize?: number,
+ *   networkRingSize?: number,
+ *   stabilityBufferSize?: number,
+ *   actionableErrorCount?: number,
+ *   lastActionableCode?: string | null,
+ *   captureInFlight?: boolean,
+ *   now?: number,
+ * }} input
+ * @returns {{
+ *   ok: boolean,
+ *   at: string,
+ *   preview: { ok: boolean, loading: boolean, destroyed: boolean, error: string },
+ *   terminals: { sessions: number, grokRunning: number, shellAlive: number },
+ *   rings: { faults: number, network: number, stability: number, actionable: number },
+ *   capture: { inFlight: boolean },
+ *   lastActionableCode: string | null,
+ *   notes: string[],
+ * }}
+ */
+function buildHealthSnapshot(input = {}) {
+  const notes = [];
+  const previewDestroyed = Boolean(input.previewDestroyed);
+  const previewError = sanitizeErrorText(input.previewError || "");
+  const previewLoading = Boolean(input.previewLoading);
+  const previewOk =
+    input.previewOk === false
+      ? false
+      : !previewDestroyed && !previewError;
+  if (previewDestroyed) notes.push("preview-destroyed");
+  if (previewError) notes.push("preview-error");
+  if (previewLoading) notes.push("preview-loading");
+
+  const sessions = Math.max(0, Number(input.sessionCount) || 0);
+  const grokRunning = Math.max(0, Number(input.grokRunningCount) || 0);
+  const shellAlive = Math.max(0, Number(input.shellAliveCount) || 0);
+  if (sessions === 0) notes.push("no-terminal-sessions");
+  if (sessions > 0 && grokRunning === 0) notes.push("no-grok-running");
+
+  const actionable = Math.max(0, Number(input.actionableErrorCount) || 0);
+  if (actionable > 0) notes.push("actionable-errors");
+
+  const captureInFlight = Boolean(input.captureInFlight);
+  if (captureInFlight) notes.push("capture-in-flight");
+
+  const at =
+    typeof input.now === "number" && Number.isFinite(input.now)
+      ? new Date(input.now).toISOString()
+      : new Date().toISOString();
+
+  const lastActionableCode =
+    typeof input.lastActionableCode === "string" && input.lastActionableCode
+      ? input.lastActionableCode.slice(0, 80)
+      : null;
+
+  const ok =
+    previewOk &&
+    !previewDestroyed &&
+    actionable === 0 &&
+    sessions > 0;
+
+  return {
+    ok,
+    at,
+    preview: {
+      ok: previewOk,
+      loading: previewLoading,
+      destroyed: previewDestroyed,
+      error: previewError,
+    },
+    terminals: {
+      sessions,
+      grokRunning,
+      shellAlive,
+    },
+    rings: {
+      faults: Math.max(0, Number(input.faultRingSize) || 0),
+      network: Math.max(0, Number(input.networkRingSize) || 0),
+      stability: Math.max(0, Number(input.stabilityBufferSize) || 0),
+      actionable,
+    },
+    capture: { inFlight: captureInFlight },
+    lastActionableCode,
+    notes,
+  };
+}
 
 /**
  * @typedef {"actionable"|"expected"|"info"} StabilitySeverity
@@ -56,12 +204,27 @@ function classifyStabilityError(input) {
 
   // Explicit codes first
   if (
-    /^(user-cancel|canceled|cancelled|preview-load|preview-not-ready|grok-missing|invalid-url|busy|nothing-to-resend|pty-exit|settings-write|stability-probe)$/i.test(
+    /^(user-cancel|canceled|cancelled|preview-load|preview-not-ready|grok-missing|invalid-url|busy|nothing-to-resend|pty-exit|settings-write|stability-probe|op-timeout|capture-timeout|preview-crash|preview-unresponsive)$/i.test(
       code,
     )
   ) {
+    const severity =
+      /^(preview-crash|preview-unresponsive)$/i.test(code)
+        ? "actionable"
+        : "expected";
     return {
       code: code.slice(0, 80),
+      severity,
+      message: sanitizeErrorText(message || code),
+    };
+  }
+
+  // Timeouts — expected host hang (page frozen), not a JS bug
+  if (
+    /op-timeout|capture-timeout|timed?\s*out|TimeoutError/i.test(blob)
+  ) {
+    return {
+      code: (code !== "unknown" ? code : "op-timeout").slice(0, 80),
       severity: "expected",
       message: sanitizeErrorText(message || code),
     };
@@ -312,6 +475,12 @@ function scanMainRequireGraph(filesByPath) {
 
 module.exports = {
   DEFAULT_RING_SIZE,
+  DEFAULT_OP_TIMEOUT_MS,
+  MIN_OP_TIMEOUT_MS,
+  MAX_OP_TIMEOUT_MS,
+  clampOpTimeoutMs,
+  withTimeout,
+  buildHealthSnapshot,
   classifyStabilityError,
   scrubStabilityMessage,
   StabilityErrorBuffer,

@@ -2,6 +2,16 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.8.10] — 2026-07-12
+
+### Stability practices from agent-browser / browser-use / playwright-mcp
+
+- `withTimeout` on `capturePage` (no silent hang; default 30s; reports `capture-timeout`)
+- Preview `render-process-gone` / `unresponsive` → stability buffer (crash-watchdog spirit)
+- Doctor-style `buildHealthSnapshot` included in copy-diagnostics JSON
+- Inventory: `docs/STABILITY-FROM-REFS.md`
+- Unit tests for timeout race, health snapshot, main wiring
+
 ## [0.8.9] — 2026-07-12
 
 ### Fix network_requests priority for mainFrame

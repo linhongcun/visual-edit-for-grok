@@ -46,11 +46,29 @@ function testFormattedSummaryIsJson() {
   assert.strictEqual(parsed.app.version, "0.6.0");
 }
 
+function testSummaryIncludesHealthWhenProvided() {
+  const summary = buildDiagnosticSummary({
+    appVersion: "0.8.10",
+    health: {
+      ok: false,
+      at: "2026-01-01T00:00:00.000Z",
+      notes: ["preview-error", "actionable-errors"],
+      lastActionableCode: "preview-crash",
+      rings: { faults: 1, network: 2, stability: 3, actionable: 1 },
+    },
+  });
+  assert.ok(summary.health);
+  assert.strictEqual(summary.health.ok, false);
+  assert.ok(summary.health.notes.includes("preview-error"));
+  assert.strictEqual(summary.health.lastActionableCode, "preview-crash");
+}
+
 const tests = [
   testUrlDropsCredentialsQueryAndHash,
   testErrorRedactsSecretsAndUrlQuery,
   testSummaryOmitsCwdAndTerminalText,
   testFormattedSummaryIsJson,
+  testSummaryIncludesHealthWhenProvided,
 ];
 let failed = 0;
 for (const test of tests) {

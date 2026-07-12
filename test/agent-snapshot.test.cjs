@@ -146,10 +146,17 @@ function testMainWiresScrollbarHide() {
   );
   const start = main.indexOf("async function takeScreenshotFile");
   assert.ok(start >= 0);
-  const body = main.slice(start, start + 3500);
-  assert.ok(body.includes("HIDE_SCROLLBAR_CSS") || body.includes("shouldHideScrollbarsForCapture"));
+  // Function grew with withTimeout + crash hooks nearby — scan until next top-level fn
+  const next = main.indexOf("\nfunction buildCaptureMeta", start);
+  const body =
+    next > start ? main.slice(start, next) : main.slice(start, start + 8000);
+  assert.ok(
+    body.includes("HIDE_SCROLLBAR_CSS") ||
+      body.includes("shouldHideScrollbarsForCapture"),
+  );
   assert.ok(body.includes("insertCSS"));
   assert.ok(body.includes("removeInsertedCSS"));
+  assert.ok(body.includes("withTimeout") || body.includes("capture-timeout"));
 }
 
 function run() {

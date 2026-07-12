@@ -13,6 +13,10 @@ const {
   findForbiddenMainRequires,
   scanMainRequireGraph,
   DEFAULT_RING_SIZE,
+  withTimeout,
+  buildHealthSnapshot,
+  clampOpTimeoutMs,
+  DEFAULT_OP_TIMEOUT_MS,
 } = require("../electron/stability.cjs");
 
 function testClassifyExpectedUserCancel() {
@@ -147,6 +151,93 @@ function testDefaultRingSizeIsPositive() {
   assert.ok(DEFAULT_RING_SIZE >= 10);
 }
 
+function testWithTimeoutResolvesFast() {
+  return withTimeout(Promise.resolve(42), 500, { label: "fast" }).then(
+    (v) => {
+      assert.strictEqual(v, 42);
+    },
+  );
+}
+
+function testWithTimeoutRejectsOnHang() {
+  return withTimeout(
+    new Promise(() => {
+      /* never resolves */
+    }),
+    50,
+    { code: "capture-timeout", label: "hang" },
+  ).then(
+    () => {
+      throw new Error("expected timeout");
+    },
+    (err) => {
+      assert.ok(err);
+      assert.strictEqual(err.code, "capture-timeout");
+      assert.match(String(err.message), /timed out/i);
+      assert.strictEqual(err.name, "TimeoutError");
+    },
+  );
+}
+
+function testClassifyTimeoutExpected() {
+  const a = classifyStabilityError({
+    code: "capture-timeout",
+    message: "preview.capturePage timed out after 30000ms",
+  });
+  assert.strictEqual(a.severity, "expected");
+  const b = classifyStabilityError({
+    code: "preview-crash",
+    message: "renderer gone: crashed",
+  });
+  assert.strictEqual(b.severity, "actionable");
+}
+
+function testBuildHealthSnapshotDoctor() {
+  const healthy = buildHealthSnapshot({
+    previewOk: true,
+    sessionCount: 1,
+    grokRunningCount: 1,
+    shellAliveCount: 1,
+    actionableErrorCount: 0,
+    faultRingSize: 2,
+    networkRingSize: 5,
+    stabilityBufferSize: 1,
+  });
+  assert.strictEqual(healthy.ok, true);
+  assert.strictEqual(healthy.terminals.sessions, 1);
+  assert.ok(Array.isArray(healthy.notes));
+
+  const sick = buildHealthSnapshot({
+    previewDestroyed: true,
+    sessionCount: 0,
+    actionableErrorCount: 2,
+    lastActionableCode: "uncaughtException",
+  });
+  assert.strictEqual(sick.ok, false);
+  assert.ok(sick.notes.includes("preview-destroyed"));
+  assert.ok(sick.notes.includes("no-terminal-sessions"));
+  assert.ok(sick.notes.includes("actionable-errors"));
+  assert.strictEqual(sick.lastActionableCode, "uncaughtException");
+}
+
+function testClampOpTimeout() {
+  assert.strictEqual(clampOpTimeoutMs(undefined), DEFAULT_OP_TIMEOUT_MS);
+  assert.ok(clampOpTimeoutMs(1) >= 1000);
+  assert.ok(clampOpTimeoutMs(999999) <= 180000);
+}
+
+function testMainWiresTimeoutAndCrashHooks() {
+  const main = fs.readFileSync(
+    path.join(__dirname, "..", "electron", "main.cjs"),
+    "utf8",
+  );
+  assert.ok(main.includes("withTimeout"));
+  assert.ok(main.includes("capture-timeout"));
+  assert.ok(main.includes("render-process-gone"));
+  assert.ok(main.includes("buildHealthSnapshot"));
+  assert.ok(main.includes("preview-crash"));
+}
+
 function run() {
   const tests = [
     testClassifyExpectedUserCancel,
@@ -162,19 +253,29 @@ function run() {
     testPackagingGuardAcceptsElectronRelative,
     testPackagingGuardScansRealElectronTree,
     testDefaultRingSizeIsPositive,
+    testWithTimeoutResolvesFast,
+    testWithTimeoutRejectsOnHang,
+    testClassifyTimeoutExpected,
+    testBuildHealthSnapshotDoctor,
+    testClampOpTimeout,
+    testMainWiresTimeoutAndCrashHooks,
   ];
   let failed = 0;
-  for (const t of tests) {
-    try {
-      t();
-      console.log(`ok  - ${t.name}`);
-    } catch (err) {
-      failed += 1;
-      console.error(`fail - ${t.name}`, err);
+  async function runAll() {
+    for (const t of tests) {
+      try {
+        const result = t();
+        if (result && typeof result.then === "function") await result;
+        console.log(`ok  - ${t.name}`);
+      } catch (err) {
+        failed += 1;
+        console.error(`fail - ${t.name}`, err);
+      }
     }
+    console.log(`\n${tests.length - failed}/${tests.length} passed`);
+    if (failed) process.exit(1);
   }
-  console.log(`\n${tests.length - failed}/${tests.length} passed`);
-  if (failed) process.exit(1);
+  return runAll();
 }
 
-run();
+void run();

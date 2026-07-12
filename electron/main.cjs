@@ -73,6 +73,9 @@ const {
   createOncePerRun,
   reportStabilityFault,
   classifyStabilityError,
+  withTimeout,
+  buildHealthSnapshot,
+  DEFAULT_OP_TIMEOUT_MS,
 } = require("./stability.cjs");
 const {
   buildPasteStatus,
@@ -1513,6 +1516,35 @@ function createPreviewView() {
     sendToRenderer("preview:status", previewStatusSnapshot());
   });
 
+  // browser-use CrashWatchdog spirit: surface renderer death without killing main
+  previewView.webContents.on("render-process-gone", (_event, details) => {
+    reportMainFault(
+      {
+        code: "preview-crash",
+        message: `preview renderer gone: ${details?.reason || "unknown"} exit=${details?.exitCode ?? "?"}`,
+        source: "preview",
+      },
+      { throttleKey: `preview-crash:${details?.reason || "x"}` },
+    );
+  });
+  previewView.webContents.on("unresponsive", () => {
+    reportMainFault(
+      {
+        code: "preview-unresponsive",
+        message: "preview webContents unresponsive",
+        source: "preview",
+      },
+      { throttleKey: "preview-unresponsive" },
+    );
+  });
+  previewView.webContents.on("responsive", () => {
+    // Clear sticky UI error if page recovers; do not invent success entries
+    if (previewError && /unresponsive/i.test(previewError)) {
+      previewError = null;
+      sendToRenderer("preview:status", previewStatusSnapshot());
+    }
+  });
+
   if (previewUrl) loadPreview(previewUrl);
   else loadWelcomePreview();
 }
@@ -2247,7 +2279,28 @@ async function takeScreenshotFile(opts = {}) {
   }
 
   try {
-    const full = await previewView.webContents.capturePage();
+    // browser-use / agent-browser: never hang forever on capturePage
+    let full;
+    try {
+      full = await withTimeout(
+        previewView.webContents.capturePage(),
+        opts.timeoutMs ?? DEFAULT_OP_TIMEOUT_MS,
+        { code: "capture-timeout", label: "preview.capturePage" },
+      );
+    } catch (timeoutErr) {
+      reportMainFault(
+        {
+          code: "capture-timeout",
+          message:
+            timeoutErr instanceof Error
+              ? timeoutErr.message
+              : "preview.capturePage timed out",
+          source: "capture",
+        },
+        { throttleKey: "capture-timeout" },
+      );
+      throw timeoutErr;
+    }
     if (full.isEmpty()) throw new Error("Screenshot is empty");
 
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -3483,6 +3536,29 @@ function registerIpc() {
         severity: "expected",
       });
     }
+    const runtime = listTerminalRuntime();
+    const actionable = stabilityBuffer
+      .list(30)
+      .filter((e) => e.severity === "actionable");
+    const health = buildHealthSnapshot({
+      previewOk: Boolean(previewView && !previewView.webContents?.isDestroyed()),
+      previewLoading,
+      previewError,
+      previewDestroyed: Boolean(
+        !previewView || previewView.webContents?.isDestroyed(),
+      ),
+      sessionCount: runtime.length,
+      grokRunningCount: runtime.filter((s) => s.grokRunning).length,
+      shellAliveCount: runtime.filter((s) => s.shellAlive).length,
+      faultRingSize: previewFaultRing.list(100).length,
+      networkRingSize: previewNetworkRing.list(100).length,
+      stabilityBufferSize: stabilityBuffer.size(),
+      actionableErrorCount: actionable.length,
+      lastActionableCode: actionable.length
+        ? actionable[actionable.length - 1].code
+        : null,
+      captureInFlight,
+    });
     const text = formatDiagnosticSummary({
       appVersion: app.getVersion(),
       grokBinaryFound: bin.ok,
@@ -3491,13 +3567,14 @@ function registerIpc() {
         ...previewStatusSnapshot(),
         privateMode,
       },
-      sessions: listTerminalRuntime().map((session) => ({
+      sessions: runtime.map((session) => ({
         ...session,
         cwdValid: isDirectory(session.cwd),
       })),
       settingsDir: path.dirname(settingsFile()),
       captureDir: CAPTURE_DIR,
       recentErrors,
+      health,
     });
     clipboard.writeText(text);
     return { ok: true };

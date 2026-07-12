@@ -65,6 +65,24 @@ function buildDiagnosticSummary(input = {}) {
           ? entry.count
           : undefined,
     })),
+    // agent-browser doctor / browser-use health spirit (optional block)
+    health:
+      input.health && typeof input.health === "object"
+        ? {
+            ok: Boolean(input.health.ok),
+            at: String(input.health.at || ""),
+            notes: Array.isArray(input.health.notes)
+              ? input.health.notes.map((n) => String(n).slice(0, 80)).slice(0, 20)
+              : [],
+            preview: input.health.preview || undefined,
+            terminals: input.health.terminals || undefined,
+            rings: input.health.rings || undefined,
+            capture: input.health.capture || undefined,
+            lastActionableCode: input.health.lastActionableCode
+              ? String(input.health.lastActionableCode).slice(0, 80)
+              : null,
+          }
+        : undefined,
   };
 }
 
