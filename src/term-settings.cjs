@@ -87,6 +87,32 @@ function clampMinimumContrastRatio(
 }
 
 /**
+ * Whether attach/retry of WebGL should run for this terminal instance.
+ * Initial open may have termRef still null — that must NOT block first attach.
+ * Only skip when disposed, or when ref already points at a different Terminal.
+ *
+ * @param {{
+ *   disposed?: boolean,
+ *   termRefCurrent?: unknown,
+ *   term?: unknown,
+ * }} [input]
+ * @returns {{ ok: boolean, reason: string }}
+ */
+function mayAttachWebglRenderer(input = {}) {
+  if (input.disposed) {
+    return { ok: false, reason: "disposed" };
+  }
+  if (
+    input.termRefCurrent != null &&
+    input.term !== undefined &&
+    input.termRefCurrent !== input.term
+  ) {
+    return { ok: false, reason: "stale-term" };
+  }
+  return { ok: true, reason: "ok" };
+}
+
+/**
  * Plan reaction to WebGL context loss (xterm addon-webgl README).
  * Always dispose the dead addon; optionally schedule one re-attach after sleep/OOM.
  *
@@ -157,6 +183,7 @@ module.exports = {
   nextTermFontSize,
   clampTermScrollback,
   clampMinimumContrastRatio,
+  mayAttachWebglRenderer,
   planWebglContextLoss,
   asBoolean,
 };

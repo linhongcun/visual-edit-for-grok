@@ -14,6 +14,11 @@ export function clampTermFontSize(value: unknown, fallback?: number): number;
 export function nextTermFontSize(current: number, delta: 1 | -1 | 0): number;
 export function clampTermScrollback(value: unknown, fallback?: number): number;
 export function clampMinimumContrastRatio(value: unknown, fallback?: number): number;
+export function mayAttachWebglRenderer(input?: {
+  disposed?: boolean;
+  termRefCurrent?: unknown;
+  term?: unknown;
+}): { ok: boolean; reason: string };
 export function planWebglContextLoss(input?: {
   lossCount?: number;
   maxRetries?: number;

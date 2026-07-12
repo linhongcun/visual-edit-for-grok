@@ -10,6 +10,7 @@ const {
   nextTermFontSize,
   clampTermScrollback,
   clampMinimumContrastRatio,
+  mayAttachWebglRenderer,
   planWebglContextLoss,
   asBoolean,
   TERM_FONT_SIZE_DEFAULT,
@@ -108,6 +109,63 @@ function testWebglContextLossPlan() {
   assert.strictEqual(done.action, "dispose-to-canvas");
 }
 
+/**
+ * Skeptic bug: termRef.current !== term while termRef is null blocks first attach.
+ * Guard must allow null/unassigned ref on initial open.
+ */
+function testMayAttachWebglRendererGate() {
+  const termA = { id: "a" };
+  const termB = { id: "b" };
+
+  // Initial open: ref not set yet → must allow attach
+  const initial = mayAttachWebglRenderer({
+    disposed: false,
+    termRefCurrent: null,
+    term: termA,
+  });
+  assert.strictEqual(initial.ok, true, "null termRef must allow first WebGL attach");
+  assert.strictEqual(initial.reason, "ok");
+
+  // Healthy live instance
+  const live = mayAttachWebglRenderer({
+    disposed: false,
+    termRefCurrent: termA,
+    term: termA,
+  });
+  assert.strictEqual(live.ok, true);
+
+  // Pane cleaned up
+  const gone = mayAttachWebglRenderer({
+    disposed: true,
+    termRefCurrent: termA,
+    term: termA,
+  });
+  assert.strictEqual(gone.ok, false);
+  assert.strictEqual(gone.reason, "disposed");
+
+  // Retry after remount to a different Terminal
+  const stale = mayAttachWebglRenderer({
+    disposed: false,
+    termRefCurrent: termB,
+    term: termA,
+  });
+  assert.strictEqual(stale.ok, false);
+  assert.strictEqual(stale.reason, "stale-term");
+
+  // Old buggy guard would reject this shape (null !== term)
+  const buggyStyle = null !== termA;
+  assert.strictEqual(buggyStyle, true);
+  assert.notStrictEqual(
+    mayAttachWebglRenderer({
+      disposed: false,
+      termRefCurrent: null,
+      term: termA,
+    }).ok,
+    false,
+    "must not reimplement the null!==term reject bug",
+  );
+}
+
 /** Renderer + electron copies export the same xterm helpers */
 function testSrcAndElectronTermSettingsInSync() {
   const src = require("../src/term-settings.cjs");
@@ -127,6 +185,14 @@ function testSrcAndElectronTermSettingsInSync() {
     src.clampMinimumContrastRatio(4.5),
     electron.clampMinimumContrastRatio(4.5),
   );
+  assert.deepStrictEqual(
+    src.mayAttachWebglRenderer({ disposed: false, termRefCurrent: null, term: {} }),
+    electron.mayAttachWebglRenderer({
+      disposed: false,
+      termRefCurrent: null,
+      term: {},
+    }),
+  );
 }
 
 function testTerminalPaneWiresXtermPolicies() {
@@ -135,11 +201,33 @@ function testTerminalPaneWiresXtermPolicies() {
     "utf8",
   );
   assert.ok(pane.includes("planWebglContextLoss"));
+  assert.ok(pane.includes("mayAttachWebglRenderer"));
   assert.ok(pane.includes("clampMinimumContrastRatio"));
   assert.ok(pane.includes("minimumContrastRatio"));
   assert.ok(pane.includes("onContextLoss"));
-  assert.ok(pane.includes("retry-webgl") || pane.includes('plan.action !== "retry-webgl"'));
-  assert.ok(pane.includes("attachWebglRenderer") || pane.includes("WebglAddon"));
+  assert.ok(pane.includes("attachWebglRenderer"));
+
+  // Ordering: termRef assigned before first attachWebglRenderer() call
+  const assignIdx = pane.indexOf("termRef.current = term");
+  const attachFnIdx = pane.indexOf("const attachWebglRenderer");
+  const firstCallIdx = pane.indexOf("attachWebglRenderer();");
+  assert.ok(assignIdx >= 0, "must assign termRef.current = term");
+  assert.ok(attachFnIdx >= 0, "must define attachWebglRenderer");
+  assert.ok(firstCallIdx >= 0, "must call attachWebglRenderer()");
+  assert.ok(
+    assignIdx < firstCallIdx,
+    "termRef.current = term must run before first attachWebglRenderer() (initial WebGL load)",
+  );
+
+  // Must not use the dead guard: webglDisposed || termRef.current !== term
+  assert.ok(
+    !/webglDisposed\s*\|\|\s*termRef\.current\s*!==\s*term/.test(pane),
+    "must not use termRef.current !== term alone (rejects null on first open)",
+  );
+  assert.ok(
+    pane.includes("mayAttachWebglRenderer({"),
+    "live attach path must call mayAttachWebglRenderer",
+  );
 }
 
 function run() {
@@ -150,6 +238,7 @@ function run() {
     testAsBoolean,
     testMinimumContrastRatioClamp,
     testWebglContextLossPlan,
+    testMayAttachWebglRendererGate,
     testSrcAndElectronTermSettingsInSync,
     testTerminalPaneWiresXtermPolicies,
   ];

@@ -38,6 +38,8 @@
 | 0 | 1 | `retry-webgl` after `retryDelayMs` (500) — dispose first |
 | ≥ maxRetries | any | `dispose-to-canvas` — stay on canvas for this terminal instance |
 
+**Attach gate** (`mayAttachWebglRenderer`): allow when `termRef` is null (first open) or still this `term`; reject only if `disposed` or ref points at a different Terminal. Assign `termRef.current = term` before first `attachWebglRenderer()`.
+
 ## minimumContrastRatio contract (shipped)
 
 | Input | Clamped |

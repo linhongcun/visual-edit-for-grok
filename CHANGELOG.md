@@ -2,6 +2,13 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.8.15] — 2026-07-12
+
+### Fix WebGL first-load attach guard
+
+- `mayAttachWebglRenderer` allows null `termRef` on initial open (old `termRef !== term` rejected first attach)
+- Assign `termRef` before first `attachWebglRenderer()`; unit tests cover null-ref allow + ordering
+
 ## [0.8.14] — 2026-07-12
 
 ### xterm.js-inspired WebGL recovery + contrast

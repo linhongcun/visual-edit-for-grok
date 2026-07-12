@@ -1,6 +1,6 @@
 {
   "name": "visual-edit-for-grok",
-  "version": "0.8.14",
+  "version": "0.8.15",
   "description": "Visual Capture for Grok — multi-terminal Grok PTY + secure Aim/Frame preview with image-paste attempts and grounded DOM context",
   "main": "electron/main.cjs",
   "private": true,

@@ -15,6 +15,7 @@ import {
   clampTermFontSize,
   clampTermScrollback,
   clampMinimumContrastRatio,
+  mayAttachWebglRenderer,
   planWebglContextLoss,
   TERM_FONT_SIZE_DEFAULT,
   TERM_SCROLLBACK_DEFAULT,
@@ -453,6 +454,16 @@ export default function TerminalPane({
       ),
     );
     term.open(hostRef.current);
+    // Assign refs BEFORE WebGL attach: mayAttachWebglRenderer allows null ref
+    // (initial open) but would reject if we wrongly required termRef === term
+    // while termRef was still null (dead first load).
+    termRef.current = term;
+    fitRef.current = fit;
+    lastDimsRef.current = { cols: term.cols, rows: term.rows };
+    wheelFrameDeltaRef.current = 0;
+    wheelFrameEventRef.current = null;
+    tuiWheelRemainderRef.current = 0;
+
     // WebGL: cleaner box-drawing for Grok tables. On context loss (sleep/OOM),
     // xterm-recommended dispose → canvas; pure plan may re-attach once.
     let webglLossCount = 0;
@@ -460,7 +471,12 @@ export default function TerminalPane({
     let webglDisposed = false;
 
     const attachWebglRenderer = () => {
-      if (webglDisposed || termRef.current !== term) return;
+      const gate = mayAttachWebglRenderer({
+        disposed: webglDisposed,
+        termRefCurrent: termRef.current,
+        term,
+      });
+      if (!gate.ok) return;
       try {
         const webgl = new WebglAddon();
         webgl.onContextLoss(() => {
@@ -491,13 +507,6 @@ export default function TerminalPane({
     };
     attachWebglRenderer();
     fit.fit();
-
-    termRef.current = term;
-    fitRef.current = fit;
-    lastDimsRef.current = { cols: term.cols, rows: term.rows };
-    wheelFrameDeltaRef.current = 0;
-    wheelFrameEventRef.current = null;
-    tuiWheelRemainderRef.current = 0;
 
     /**
      * Own precision wheel in capture phase on xterm's root. The visible
