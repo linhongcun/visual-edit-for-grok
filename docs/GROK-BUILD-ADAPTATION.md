@@ -50,12 +50,19 @@ For each image (then text once):
 
 If step 1 fails for an `imageIndex`, **`mayExecuteGrokPasteStep` skips** that
 index’s write/delay/restore so a **stale** OS clipboard is never pasted.
+`buildPasteStatus` with `imagesWanted` / `imagePrepOkCount` surfaces honest
+manual-⌘V messaging (never “image paste attempted” when no key was injected).
+
+Paste delays live in **`resolvePasteDelayMs` / `DEFAULT_PASTE_DELAYS_MS`** (clamped 0–5000ms).
+
+OSC 52 from Grok is assembled with **`pushOsc52Stream`** (cross-chunk buffer).
 
 ## Diagnostics
 
 `buildDiagnosticSummary.grokHost` includes:
 
-- `termProgram` / `termProgramVersion` / `identityReason`  
+- `termProgram` / `termProgramVersion` / `identityReason` / `spoofed`  
+- `pasteCtrlV` / `pasteSuperV` / `pastePrepGate` / `pasteDelaysMs` / `osc52Stream`  
 - `terminalSetupHint`: run `/terminal-setup` inside Grok  
 
 ## Key files

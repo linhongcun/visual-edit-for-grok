@@ -21,6 +21,21 @@ const SEQ_CTRL_V = "\x16";
 /** Kitty CSI-u Super+V (macOS Cmd+V paste for image chips). */
 const SEQ_SUPER_V = `\x1b[${KITTY_KEY_V};${KITTY_MOD_SUPER}u`;
 
+/** Default multimodal paste delays (ms) — pure plan source of truth. */
+const DEFAULT_PASTE_DELAYS_MS = Object.freeze({
+  focusSettleMs: 90,
+  clipboardSettleMs: 60,
+  afterCtrlVMs: 120,
+  afterSuperVMs: 200,
+  beforeTextMs: 80,
+  afterTextMs: 40,
+});
+const PASTE_DELAY_MIN_MS = 0;
+const PASTE_DELAY_MAX_MS = 5_000;
+
+/** OSC 52 stream: max carry buffer across PTY chunks (bytes). */
+const OSC52_MAX_BUFFER = 256_000;
+
 const PARENT_BRANDS_TO_SPOOF = new Set([
   "",
   "apple_terminal",
@@ -193,12 +208,13 @@ function planGrokMultimodalPaste(input = {}) {
     Math.min(8, Math.floor(Number(input.imageCount) || 0)),
   );
   const hasText = input.hasText !== false;
-  const focusSettleMs = clampDelay(input.focusSettleMs, 90);
-  const clipboardSettleMs = clampDelay(input.clipboardSettleMs, 60);
-  const afterCtrlVMs = clampDelay(input.afterCtrlVMs, 120);
-  const afterSuperVMs = clampDelay(input.afterSuperVMs, 200);
-  const beforeTextMs = clampDelay(input.beforeTextMs, 80);
-  const afterTextMs = clampDelay(input.afterTextMs, 40);
+  const delays = resolvePasteDelayMs(input);
+  const focusSettleMs = delays.focusSettleMs;
+  const clipboardSettleMs = delays.clipboardSettleMs;
+  const afterCtrlVMs = delays.afterCtrlVMs;
+  const afterSuperVMs = delays.afterSuperVMs;
+  const beforeTextMs = delays.beforeTextMs;
+  const afterTextMs = delays.afterTextMs;
   const pasteKeys = resolveGrokPasteKeySequences({
     platform: input.platform,
   });
@@ -351,11 +367,37 @@ function mayExecuteGrokPasteStep(step, prepOkByIndex) {
 function clampDelay(value, fallback) {
   const n = Number(value);
   if (!Number.isFinite(n)) return fallback;
-  return Math.min(5_000, Math.max(0, Math.round(n)));
+  return Math.min(
+    PASTE_DELAY_MAX_MS,
+    Math.max(PASTE_DELAY_MIN_MS, Math.round(n)),
+  );
 }
 
 /**
- * Extract OSC 52 clipboard payloads from a PTY chunk (Grok copy → host).
+ * Clamp all multimodal paste delays (pure source of truth for timing).
+ * @param {{
+ *   focusSettleMs?: number,
+ *   clipboardSettleMs?: number,
+ *   afterCtrlVMs?: number,
+ *   afterSuperVMs?: number,
+ *   beforeTextMs?: number,
+ *   afterTextMs?: number,
+ * }} [input]
+ */
+function resolvePasteDelayMs(input = {}) {
+  const d = DEFAULT_PASTE_DELAYS_MS;
+  return {
+    focusSettleMs: clampDelay(input.focusSettleMs, d.focusSettleMs),
+    clipboardSettleMs: clampDelay(input.clipboardSettleMs, d.clipboardSettleMs),
+    afterCtrlVMs: clampDelay(input.afterCtrlVMs, d.afterCtrlVMs),
+    afterSuperVMs: clampDelay(input.afterSuperVMs, d.afterSuperVMs),
+    beforeTextMs: clampDelay(input.beforeTextMs, d.beforeTextMs),
+    afterTextMs: clampDelay(input.afterTextMs, d.afterTextMs),
+  };
+}
+
+/**
+ * Extract complete OSC 52 clipboard payloads from a string (may be buffered).
  * Sequence: ESC ] 52 ; <pc> ; <base64> BEL  or  ESC ] 52 ; <pc> ; <base64> ESC \
  *
  * @param {string} chunk
@@ -365,7 +407,6 @@ function extractOsc52ClipboardPayloads(chunk) {
   const s = String(chunk || "");
   if (!s.includes("\x1b]52;")) return [];
   const out = [];
-  // Global match for OSC 52 bodies
   const re = /\x1b\]52;([^;]*);([^\x07\x1b]*)(?:\x07|\x1b\\)/g;
   let m;
   while ((m = re.exec(s)) !== null) {
@@ -385,6 +426,51 @@ function extractOsc52ClipboardPayloads(chunk) {
 }
 
 /**
+ * Strip complete OSC 52 frames; keep incomplete trailing start for next chunk.
+ * @param {string} s
+ * @returns {string}
+ */
+function stripCompleteOsc52Frames(s) {
+  return String(s || "").replace(
+    /\x1b\]52;[^;]*;[^\x07\x1b]*(?:\x07|\x1b\\)/g,
+    "",
+  );
+}
+
+/**
+ * Push a PTY chunk into a carry buffer and extract complete OSC 52 payloads.
+ * Handles frames split across chunks. Incomplete prefix is retained (bounded).
+ *
+ * @param {{ buffer?: string, maxBuffer?: number } | null | undefined} state
+ * @param {string} chunk
+ * @returns {{
+ *   payloads: Array<{ target: string, text: string }>,
+ *   buffer: string,
+ * }}
+ */
+function pushOsc52Stream(state, chunk) {
+  const maxBuffer = Math.max(
+    1024,
+    Math.min(2_000_000, Number(state?.maxBuffer) || OSC52_MAX_BUFFER),
+  );
+  let buffer = String(state?.buffer || "") + String(chunk || "");
+  if (buffer.length > maxBuffer) {
+    buffer = buffer.slice(-maxBuffer);
+  }
+  const payloads = extractOsc52ClipboardPayloads(buffer);
+  if (payloads.length > 0) {
+    buffer = stripCompleteOsc52Frames(buffer);
+  }
+  const start = buffer.lastIndexOf("\x1b]52;");
+  if (start < 0) {
+    buffer = "";
+  } else if (start > 0) {
+    buffer = buffer.slice(start);
+  }
+  return { payloads, buffer };
+}
+
+/**
  * Snapshot for diagnostics / health.
  * @param {{
  *   identity?: ReturnType<typeof resolveGrokTermProgramIdentity>,
@@ -401,6 +487,7 @@ function buildGrokHostDiagnosticBlock(input = {}) {
   const pasteKeys = resolveGrokPasteKeySequences({
     platform: input.platform || process.platform,
   });
+  const delays = resolvePasteDelayMs();
   return {
     termProgram: identity.termProgram,
     termProgramVersion: identity.termProgramVersion,
@@ -408,6 +495,9 @@ function buildGrokHostDiagnosticBlock(input = {}) {
     spoofed: identity.spoofed,
     pasteCtrlV: true,
     pasteSuperV: pasteKeys.useSuperV,
+    pastePrepGate: true,
+    pasteDelaysMs: delays,
+    osc52Stream: true,
     terminalSetupHint: TERMINAL_SETUP_HINT,
   };
 }
@@ -415,14 +505,21 @@ function buildGrokHostDiagnosticBlock(input = {}) {
 module.exports = {
   DEFAULT_TERM_PROGRAM,
   DEFAULT_TERM_PROGRAM_VERSION,
+  DEFAULT_PASTE_DELAYS_MS,
+  PASTE_DELAY_MIN_MS,
+  PASTE_DELAY_MAX_MS,
+  OSC52_MAX_BUFFER,
   SEQ_CTRL_V,
   SEQ_SUPER_V,
   TERMINAL_SETUP_HINT,
   normalizeTermProgram,
   resolveGrokTermProgramIdentity,
   resolveGrokPasteKeySequences,
+  resolvePasteDelayMs,
   planGrokMultimodalPaste,
   mayExecuteGrokPasteStep,
   extractOsc52ClipboardPayloads,
+  pushOsc52Stream,
+  stripCompleteOsc52Frames,
   buildGrokHostDiagnosticBlock,
 };

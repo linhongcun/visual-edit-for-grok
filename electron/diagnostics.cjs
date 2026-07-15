@@ -56,6 +56,13 @@ function buildDiagnosticSummary(input = {}) {
             spoofed: Boolean(input.grokHost.spoofed),
             pasteCtrlV: Boolean(input.grokHost.pasteCtrlV),
             pasteSuperV: Boolean(input.grokHost.pasteSuperV),
+            pastePrepGate: Boolean(input.grokHost.pastePrepGate),
+            osc52Stream: Boolean(input.grokHost.osc52Stream),
+            pasteDelaysMs:
+              input.grokHost.pasteDelaysMs &&
+              typeof input.grokHost.pasteDelaysMs === "object"
+                ? input.grokHost.pasteDelaysMs
+                : undefined,
             terminalSetupHint: String(
               input.grokHost.terminalSetupHint || "",
             ).slice(0, 240),

@@ -8,11 +8,15 @@ const path = require("path");
 const {
   resolveGrokTermProgramIdentity,
   resolveGrokPasteKeySequences,
+  resolvePasteDelayMs,
   planGrokMultimodalPaste,
   mayExecuteGrokPasteStep,
   extractOsc52ClipboardPayloads,
+  pushOsc52Stream,
   buildGrokHostDiagnosticBlock,
   DEFAULT_TERM_PROGRAM,
+  DEFAULT_PASTE_DELAYS_MS,
+  PASTE_DELAY_MAX_MS,
   SEQ_CTRL_V,
   SEQ_SUPER_V,
   TERMINAL_SETUP_HINT,
@@ -184,6 +188,41 @@ function testOsc52Extract() {
   );
 }
 
+/** Split OSC 52 across two PTY chunks must still yield the payload. */
+function testOsc52StreamSplitChunks() {
+  const text = "split-frame-payload";
+  const b64 = Buffer.from(text, "utf8").toString("base64");
+  const full = `\x1b]52;c;${b64}\x07`;
+  const mid = Math.floor(full.length / 2);
+  const a = pushOsc52Stream({ buffer: "" }, full.slice(0, mid));
+  assert.strictEqual(a.payloads.length, 0, "incomplete frame must not invent payload");
+  assert.ok(a.buffer.length > 0);
+  const b = pushOsc52Stream({ buffer: a.buffer }, full.slice(mid));
+  assert.strictEqual(b.payloads.length, 1);
+  assert.strictEqual(b.payloads[0].text, text);
+  assert.strictEqual(b.buffer, "");
+
+  // Single chunk still works
+  const one = pushOsc52Stream({ buffer: "" }, full);
+  assert.strictEqual(one.payloads[0].text, text);
+}
+
+function testPasteDelayClamps() {
+  const d = resolvePasteDelayMs();
+  assert.strictEqual(d.focusSettleMs, DEFAULT_PASTE_DELAYS_MS.focusSettleMs);
+  const hi = resolvePasteDelayMs({ focusSettleMs: 999999, afterCtrlVMs: -10 });
+  assert.strictEqual(hi.focusSettleMs, PASTE_DELAY_MAX_MS);
+  assert.strictEqual(hi.afterCtrlVMs, 0);
+  const plan = planGrokMultimodalPaste({
+    platform: "linux",
+    imageCount: 1,
+    hasText: false,
+    focusSettleMs: 50,
+  });
+  const focus = plan.steps.find((s) => s.reason === "focus-settle");
+  assert.strictEqual(focus.ms, 50);
+}
+
 function testDiagnosticBlock() {
   const id = resolveGrokTermProgramIdentity({
     parentTermProgram: "Electron",
@@ -195,6 +234,9 @@ function testDiagnosticBlock() {
   assert.strictEqual(block.termProgram, "ghostty");
   assert.strictEqual(block.pasteCtrlV, true);
   assert.strictEqual(block.pasteSuperV, true);
+  assert.strictEqual(block.pastePrepGate, true);
+  assert.strictEqual(block.osc52Stream, true);
+  assert.ok(block.pasteDelaysMs);
   assert.ok(block.terminalSetupHint.includes("/terminal-setup"));
   assert.strictEqual(TERMINAL_SETUP_HINT.includes("terminal-setup"), true);
 }
@@ -215,7 +257,8 @@ function testMainAndTerminalWiring() {
   assert.ok(main.includes("planGrokMultimodalPaste"));
   assert.ok(main.includes("mayExecuteGrokPasteStep"));
   assert.ok(main.includes("prepOkByIndex"));
-  assert.ok(main.includes("extractOsc52ClipboardPayloads"));
+  assert.ok(main.includes("pushOsc52Stream"));
+  assert.ok(main.includes("imagesWanted"));
   assert.ok(term.includes("resolveGrokTermProgramIdentity"));
   assert.ok(diag.includes("grokHost") || main.includes("grokHost"));
   assert.ok(main.includes("clipboard-image-only") || main.includes("plan.steps"));
@@ -223,6 +266,10 @@ function testMainAndTerminalWiring() {
   assert.ok(
     /mayExecuteGrokPasteStep\s*\(/.test(main),
     "main must call mayExecuteGrokPasteStep before paste writes",
+  );
+  assert.ok(
+    /pushOsc52Stream\s*\(/.test(main),
+    "PTY onData must use pushOsc52Stream for cross-chunk OSC 52",
   );
 }
 
@@ -238,6 +285,8 @@ function run() {
     testMayExecuteSkipsWritesWhenPrepFailed,
     testMayExecutePerImageIndex,
     testOsc52Extract,
+    testOsc52StreamSplitChunks,
+    testPasteDelayClamps,
     testDiagnosticBlock,
     testMainAndTerminalWiring,
   ];

@@ -133,6 +133,52 @@ function testFailedWriteStillRecordsAttemptWithoutConfirmation() {
   assert.strictEqual(r.fallback, "clipboard-only");
 }
 
+/**
+ * Prep gate: all image clipboard preps failed → never claim image paste inject.
+ */
+function testImagePrepAllFailedHonestManualPaste() {
+  const withText = buildPasteStatus({
+    locale: "en",
+    terminalAlive: true,
+    grokRunning: true,
+    textPasted: true,
+    textPasteAttempted: true,
+    imagePrepared: false,
+    imageChipAttempted: false,
+    imagesWanted: 2,
+    imagePrepOkCount: 0,
+  });
+  assert.strictEqual(withText.deliveryOutcome, "text-attempted");
+  assert.ok(
+    /never reached the clipboard|no image paste key was sent/i.test(
+      withText.statusMessage,
+    ),
+    withText.statusMessage,
+  );
+  assert.ok(!/Attempted image paste/i.test(withText.statusMessage));
+  assert.strictEqual(withText.fallback, "manual-image-paste");
+
+  const noText = buildPasteStatus({
+    locale: "en",
+    terminalAlive: true,
+    grokRunning: true,
+    textPasted: false,
+    textPasteAttempted: false,
+    imagePrepared: false,
+    imageChipAttempted: false,
+    imagesWanted: 1,
+    imagePrepOkCount: 0,
+  });
+  assert.ok(
+    /Could not put the capture image on the clipboard/i.test(
+      noText.statusMessage,
+    ),
+    noText.statusMessage,
+  );
+  assert.ok(!/Attempted image paste/i.test(noText.statusMessage));
+  assert.notStrictEqual(noText.deliveryOutcome, "image-attempted");
+}
+
 function testLiveShellWithoutGrokUsesClipboardOnly() {
   const r = buildDeliveryStatus({
     terminalAlive: false,
@@ -259,6 +305,7 @@ function run() {
     testManualImageFallback,
     testShellWriteNeverClaimsGrokReceipt,
     testFailedWriteStillRecordsAttemptWithoutConfirmation,
+    testImagePrepAllFailedHonestManualPaste,
     testLiveShellWithoutGrokUsesClipboardOnly,
     testLegacyTerminalAliveMeansReceivingGrokPty,
     testClassifyImageAttemptedNeverConfirmed,

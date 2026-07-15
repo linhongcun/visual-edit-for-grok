@@ -71,7 +71,7 @@ const { formatDiagnosticSummary } = require("./diagnostics.cjs");
 const {
   planGrokMultimodalPaste,
   mayExecuteGrokPasteStep,
-  extractOsc52ClipboardPayloads,
+  pushOsc52Stream,
   buildGrokHostDiagnosticBlock,
   resolveGrokTermProgramIdentity,
 } = require("./grok-host-policy.cjs");
@@ -2315,6 +2315,11 @@ async function pasteToGrokMultimodal(
     }
   }
 
+  let imagePrepOkCount = 0;
+  for (const v of prepOkByIndex.values()) {
+    if (v) imagePrepOkCount += 1;
+  }
+
   const status = buildPasteStatus({
     locale: uiLocale,
     terminalAlive: true,
@@ -2325,6 +2330,8 @@ async function pasteToGrokMultimodal(
     textPasted,
     imagePrepared,
     imageChipAttempted,
+    imagesWanted: screenshots.length,
+    imagePrepOkCount,
   });
   return {
     ...status,
@@ -2334,6 +2341,7 @@ async function pasteToGrokMultimodal(
     grokRunning: true,
     imageAttachmentsAttempted,
     pastePlanSteps: plan.steps.length,
+    imagePrepOkCount,
   };
 }
 
@@ -3315,13 +3323,16 @@ function createTerminalSlot(opts = {}) {
   if (terminalSlots.has(meta.id)) {
     return terminalSlots.get(meta.id);
   }
+  /** Per-session OSC 52 carry buffer (frames may split across PTY chunks). */
+  let osc52Buffer = "";
   const pty = new TerminalSession({
     cwd: meta.cwd,
     onData: (data) => {
-      // Best-effort: Grok OSC 52 copy → system clipboard (outer host duty)
+      // Best-effort: Grok OSC 52 copy → system clipboard (stream-complete)
       try {
-        const oscHits = extractOsc52ClipboardPayloads(data);
-        for (const hit of oscHits) {
+        const next = pushOsc52Stream({ buffer: osc52Buffer }, data);
+        osc52Buffer = next.buffer;
+        for (const hit of next.payloads) {
           if (hit.text) clipboard.writeText(hit.text);
         }
       } catch {

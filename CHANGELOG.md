@@ -2,6 +2,15 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.8.18] — 2026-07-16
+
+### Grok host reliability polish (honest fail paths, OSC 52 stream, delays)
+
+- **Honest status:** when all image clipboard preps fail, status never claims image paste inject; points to manual ⌘V (`main.imagePrepFailed*`)
+- **OSC 52 stream:** `pushOsc52Stream` assembles frames split across PTY chunks (bounded buffer)
+- **Paste delays:** centralized `resolvePasteDelayMs` / `DEFAULT_PASTE_DELAYS_MS` feeding the multimodal plan
+- Diagnostics `grokHost` adds prep gate, delays, and osc52Stream flags
+
 ## [0.8.17] — 2026-07-16
 
 ### Fix multimodal paste when clipboard prep fails

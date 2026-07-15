@@ -141,6 +141,8 @@ function deliveryOutcomeLabel(kind, locale = "en") {
  *   textPasted: boolean,
  *   imagePrepared: boolean,
  *   imageChipAttempted: boolean,
+ *   imagesWanted?: number,
+ *   imagePrepOkCount?: number,
  *   locale?: string,
  *   copied?: boolean,
  * }} input
@@ -184,11 +186,23 @@ function buildPasteStatus(input = {}) {
       : Boolean(input.textPasteAttempted);
   const imagePrepared = Boolean(input.imagePrepared);
   const imageChipAttempted = Boolean(input.imageChipAttempted);
+  const imagesWanted = Math.max(
+    0,
+    Math.floor(Number(input.imagesWanted) || 0),
+  );
+  const imagePrepOkCount = Math.max(
+    0,
+    Math.floor(
+      Number(input.imagePrepOkCount) || (imagePrepared ? 1 : 0),
+    ),
+  );
   const deliveryAttempted = textPasteAttempted || imageChipAttempted;
 
   const common = {
     imagePrepared,
     imageChipAttempted,
+    imagesWanted,
+    imagePrepOkCount,
     // There is no Grok CLI acknowledgement today. Do not turn a Ctrl+V write
     // into a claim that a chip appeared or that Grok received the payload.
     imageChipConfirmed: false,
@@ -235,11 +249,27 @@ function buildPasteStatus(input = {}) {
   let statusMessage = "";
   let fallback = null;
 
-  if (pasted && imageChipAttempted) {
+  // Wanted images but prep failed for all → never imply an image paste ran
+  const allImagePrepFailed =
+    imagesWanted > 0 && imagePrepOkCount === 0 && !imageChipAttempted;
+
+  if (allImagePrepFailed) {
+    if (textPasted || textPasteAttempted) {
+      statusMessage = t(locale, "main.imagePrepFailedTextOk");
+      fallback = "manual-image-paste";
+    } else {
+      statusMessage = t(locale, "main.imagePrepFailedManual");
+      fallback = "clipboard-only";
+    }
+  } else if (pasted && imageChipAttempted) {
     statusMessage = t(locale, "main.imageAttempted");
     fallback = "verify-image-paste";
   } else if (pasted && !imageChipAttempted && imagePrepared) {
+    // Prep ok but no paste key inject (unexpected) — still honest
     statusMessage = t(locale, "main.textImageClip");
+    fallback = "manual-image-paste";
+  } else if (!pasted && imagePrepared && !imageChipAttempted && imagesWanted > 0) {
+    statusMessage = t(locale, "main.imageWantedNoInject");
     fallback = "manual-image-paste";
   } else if (pasted) {
     statusMessage = t(locale, "main.textOnly");
@@ -253,10 +283,12 @@ function buildPasteStatus(input = {}) {
     pastedToTerminal: pasted,
     textPasted,
     textPasteAttempted,
-    imageChipAttempted,
-    imagePrepared,
+    // Do not classify as image-attempted when we never injected paste keys
+    imageChipAttempted: allImagePrepFailed ? false : imageChipAttempted,
+    imagePrepared: allImagePrepFailed ? false : imagePrepared,
     fallback,
     copied: Boolean(fallback) || pasted,
+    hasImage: imagesWanted > 0 || imagePrepared,
   });
 
   return {
