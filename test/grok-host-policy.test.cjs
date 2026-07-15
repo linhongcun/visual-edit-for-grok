@@ -9,6 +9,7 @@ const {
   resolveGrokTermProgramIdentity,
   resolveGrokPasteKeySequences,
   planGrokMultimodalPaste,
+  mayExecuteGrokPasteStep,
   extractOsc52ClipboardPayloads,
   buildGrokHostDiagnosticBlock,
   DEFAULT_TERM_PROGRAM,
@@ -103,6 +104,67 @@ function testPlanTwoImagesTwoCtrlV() {
   assert.strictEqual(ctrlWrites.length, 2);
   assert.ok(!plan.steps.some((s) => s.reason === "super-v-paste"));
   assert.ok(!plan.steps.some((s) => s.kind === "bracketed-paste-text"));
+  // Write steps must carry imageIndex for prep-gate wiring
+  assert.ok(ctrlWrites.every((s) => typeof s.imageIndex === "number"));
+}
+
+/**
+ * Skeptic regression: failed clipboard prep must block Ctrl+V / Super+V
+ * for that imageIndex (stale clipboard must not be pasted into Grok).
+ */
+function testMayExecuteSkipsWritesWhenPrepFailed() {
+  const plan = planGrokMultimodalPaste({
+    platform: "darwin",
+    imageCount: 1,
+    hasText: true,
+  });
+  const prepMap = new Map();
+  // No prep recorded yet → image-scoped writes blocked
+  const ctrl = plan.steps.find((s) => s.reason === "ctrl-v-paste");
+  const superV = plan.steps.find((s) => s.reason === "super-v-paste");
+  const text = plan.steps.find((s) => s.kind === "bracketed-paste-text");
+  assert.ok(ctrl && superV && text);
+
+  assert.strictEqual(
+    mayExecuteGrokPasteStep(ctrl, prepMap).ok,
+    false,
+    "ctrl-v blocked before prep",
+  );
+  assert.strictEqual(mayExecuteGrokPasteStep(ctrl, prepMap).reason, "prep-failed");
+  assert.strictEqual(mayExecuteGrokPasteStep(superV, prepMap).ok, false);
+
+  // Text path always allowed
+  assert.strictEqual(mayExecuteGrokPasteStep(text, prepMap).ok, true);
+
+  // Prep success unlocks paste keys for that index only
+  prepMap.set(0, true);
+  assert.strictEqual(mayExecuteGrokPasteStep(ctrl, prepMap).ok, true);
+  assert.strictEqual(mayExecuteGrokPasteStep(superV, prepMap).ok, true);
+
+  // Prep failure stays blocked
+  prepMap.set(0, false);
+  assert.strictEqual(mayExecuteGrokPasteStep(ctrl, prepMap).ok, false);
+
+  // clipboard-image-only always runs (to record prep)
+  const prepStep = plan.steps.find((s) => s.kind === "clipboard-image-only");
+  assert.strictEqual(
+    mayExecuteGrokPasteStep(prepStep, new Map()).ok,
+    true,
+  );
+}
+
+/** Multi-image: failed index 0 does not unlock writes for index 0 */
+function testMayExecutePerImageIndex() {
+  const plan = planGrokMultimodalPaste({
+    platform: "linux",
+    imageCount: 2,
+    hasText: false,
+  });
+  const prep = new Map([[0, false], [1, true]]);
+  const writes = plan.steps.filter((s) => s.reason === "ctrl-v-paste");
+  assert.strictEqual(writes.length, 2);
+  assert.strictEqual(mayExecuteGrokPasteStep(writes[0], prep).ok, false);
+  assert.strictEqual(mayExecuteGrokPasteStep(writes[1], prep).ok, true);
 }
 
 function testOsc52Extract() {
@@ -151,10 +213,17 @@ function testMainAndTerminalWiring() {
     "utf8",
   );
   assert.ok(main.includes("planGrokMultimodalPaste"));
+  assert.ok(main.includes("mayExecuteGrokPasteStep"));
+  assert.ok(main.includes("prepOkByIndex"));
   assert.ok(main.includes("extractOsc52ClipboardPayloads"));
   assert.ok(term.includes("resolveGrokTermProgramIdentity"));
   assert.ok(diag.includes("grokHost") || main.includes("grokHost"));
   assert.ok(main.includes("clipboard-image-only") || main.includes("plan.steps"));
+  // Gate paste writes through mayExecuteGrokPasteStep (not bare write loop)
+  assert.ok(
+    /mayExecuteGrokPasteStep\s*\(/.test(main),
+    "main must call mayExecuteGrokPasteStep before paste writes",
+  );
 }
 
 function run() {
@@ -166,6 +235,8 @@ function run() {
     testPasteKeysLinuxCtrlOnly,
     testPlanImageThenTextOrdering,
     testPlanTwoImagesTwoCtrlV,
+    testMayExecuteSkipsWritesWhenPrepFailed,
+    testMayExecutePerImageIndex,
     testOsc52Extract,
     testDiagnosticBlock,
     testMainAndTerminalWiring,

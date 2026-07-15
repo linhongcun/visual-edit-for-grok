@@ -216,30 +216,37 @@ function planGrokMultimodalPaste(input = {}) {
       imageIndex: i,
       reason: "image-only-no-text",
     });
+    // Paste keys + image-scoped delays carry imageIndex so the host can skip
+    // them when clipboard prep for that index failed (avoid stale paste).
     steps.push({
       kind: "delay",
       ms: clipboardSettleMs,
+      imageIndex: i,
       reason: "clipboard-settle",
     });
     steps.push({
       kind: "write",
       sequence: pasteKeys.ctrlV,
+      imageIndex: i,
       reason: "ctrl-v-paste",
     });
     steps.push({
       kind: "delay",
       ms: afterCtrlVMs,
+      imageIndex: i,
       reason: "after-ctrl-v",
     });
     if (pasteKeys.useSuperV && pasteKeys.superV) {
       steps.push({
         kind: "write",
         sequence: pasteKeys.superV,
+        imageIndex: i,
         reason: "super-v-paste",
       });
       steps.push({
         kind: "delay",
         ms: afterSuperVMs,
+        imageIndex: i,
         reason: "after-super-v",
       });
     }
@@ -279,6 +286,61 @@ function planGrokMultimodalPaste(input = {}) {
 
 const TERMINAL_SETUP_HINT =
   "Inside Grok TUI run /terminal-setup (aliases /terminal-check, /terminal-info) to verify truecolor, clipboard routes, and newline chords.";
+
+/**
+ * Whether a multimodal paste plan step may run given per-image prep results.
+ * When clipboard-image-only fails for an index, skip Ctrl+V / Super+V (and
+ * image-scoped delays / restore) so Grok does not receive a stale clipboard.
+ *
+ * @param {{
+ *   kind?: string,
+ *   reason?: string,
+ *   imageIndex?: number,
+ * }} step
+ * @param {Record<number, boolean> | Map<number, boolean> | null | undefined} prepOkByIndex
+ * @returns {{ ok: boolean, reason: string }}
+ */
+function mayExecuteGrokPasteStep(step, prepOkByIndex) {
+  if (!step || typeof step !== "object") {
+    return { ok: false, reason: "invalid-step" };
+  }
+  const kind = String(step.kind || "");
+  const reason = String(step.reason || "");
+
+  // Always allow focus settle and text path (independent of image prep)
+  if (kind === "delay" && reason === "focus-settle") {
+    return { ok: true, reason: "focus-settle" };
+  }
+  if (
+    kind === "bracketed-paste-text" ||
+    (kind === "delay" &&
+      (reason === "before-text" || reason === "after-text"))
+  ) {
+    return { ok: true, reason: "text-path" };
+  }
+
+  // Prep step itself always runs (records success/failure into prep map)
+  if (kind === "clipboard-image-only") {
+    return { ok: true, reason: "prep" };
+  }
+
+  // Image-scoped steps require prepOk for that index
+  if (
+    typeof step.imageIndex === "number" &&
+    Number.isFinite(step.imageIndex)
+  ) {
+    const idx = Math.floor(step.imageIndex);
+    const ok =
+      prepOkByIndex instanceof Map
+        ? prepOkByIndex.get(idx) === true
+        : Boolean(prepOkByIndex && prepOkByIndex[idx]);
+    if (!ok) {
+      return { ok: false, reason: "prep-failed" };
+    }
+  }
+
+  return { ok: true, reason: "ok" };
+}
 
 /**
  * @param {unknown} value
@@ -359,6 +421,7 @@ module.exports = {
   resolveGrokTermProgramIdentity,
   resolveGrokPasteKeySequences,
   planGrokMultimodalPaste,
+  mayExecuteGrokPasteStep,
   extractOsc52ClipboardPayloads,
   buildGrokHostDiagnosticBlock,
 };

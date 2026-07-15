@@ -70,6 +70,7 @@ const {
 const { formatDiagnosticSummary } = require("./diagnostics.cjs");
 const {
   planGrokMultimodalPaste,
+  mayExecuteGrokPasteStep,
   extractOsc52ClipboardPayloads,
   buildGrokHostDiagnosticBlock,
   resolveGrokTermProgramIdentity,
@@ -2245,17 +2246,31 @@ async function pasteToGrokMultimodal(
   let imageAttachmentsAttempted = 0;
   let textPasted = false;
   let textPasteAttempted = false;
+  /** @type {Map<number, boolean>} per-image clipboard prep success */
+  const prepOkByIndex = new Map();
 
   for (const step of plan.steps) {
     try {
+      // Skip paste keys / image delays when prep for that imageIndex failed
+      // (regression guard: never inject Ctrl+V on a stale clipboard)
+      if (step.kind !== "clipboard-image-only") {
+        const gate = mayExecuteGrokPasteStep(step, prepOkByIndex);
+        if (!gate.ok) continue;
+      }
+
       if (step.kind === "delay") {
         await delay(step.ms || 0);
         continue;
       }
       if (step.kind === "clipboard-image-only") {
-        const imagePath = screenshots[step.imageIndex ?? 0];
-        if (!imagePath) continue;
+        const idx = Math.floor(Number(step.imageIndex) || 0);
+        const imagePath = screenshots[idx];
+        if (!imagePath) {
+          prepOkByIndex.set(idx, false);
+          continue;
+        }
         const prepared = await putScreenshotOnClipboardForGrok(imagePath);
+        prepOkByIndex.set(idx, Boolean(prepared));
         imagePrepared = imagePrepared || prepared;
         continue;
       }
@@ -2278,8 +2293,11 @@ async function pasteToGrokMultimodal(
         continue;
       }
       if (step.kind === "clipboard-image-restore") {
-        const imagePath =
-          screenshots[step.imageIndex ?? screenshots.length - 1];
+        const idx = Math.floor(
+          Number(step.imageIndex ?? screenshots.length - 1) || 0,
+        );
+        if (prepOkByIndex.get(idx) !== true) continue;
+        const imagePath = screenshots[idx];
         if (imagePath) await putScreenshotOnClipboardForGrok(imagePath);
         continue;
       }

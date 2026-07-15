@@ -46,6 +46,9 @@ For each image (then text once):
 6. Bracketed-paste DOM/context text.  
 7. Restore last image on clipboard for manual ⌘V fallback.
 
+If step 1 fails for an `imageIndex`, **`mayExecuteGrokPasteStep` skips** that
+index’s write/delay/restore so a **stale** OS clipboard is never pasted.
+
 ## Diagnostics
 
 `buildDiagnosticSummary.grokHost` includes:

@@ -2,6 +2,13 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.8.17] — 2026-07-16
+
+### Fix multimodal paste when clipboard prep fails
+
+- `mayExecuteGrokPasteStep`: skip Ctrl+V / Super+V / image-scoped delays when `putScreenshotOnClipboardForGrok` fails for that `imageIndex` (no stale clipboard paste)
+- Unit tests for prep-failed gate; main tracks `prepOkByIndex`
+
 ## [0.8.16] — 2026-07-16
 
 ### Grok Build host adaptation (identity + multimodal paste + diagnostics)
