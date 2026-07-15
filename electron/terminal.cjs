@@ -1,6 +1,9 @@
 const os = require("os");
 const path = require("path");
 const fs = require("fs");
+const {
+  resolveGrokTermProgramIdentity,
+} = require("./grok-host-policy.cjs");
 
 /** @type {import('node-pty') | null} */
 let ptyMod = null;
@@ -86,26 +89,18 @@ function buildColorfulEnv(base = process.env, size = {}) {
     env.LINES = String(Math.floor(rows));
   }
 
-  // Grok enables macOS Cmd+A (select all in prompt) only when it detects
-  // Ghostty. We are an Electron+xterm host that remaps Cmd chords into Kitty
-  // CSI-u sequences, so advertise as Ghostty so those bindings are live.
-  // (Plain Apple Terminal still gets overridden; do not force when already set
-  // to a non-Apple identity via the parent env for debugging.)
-  if (
-    !env.TERM_PROGRAM ||
-    env.TERM_PROGRAM === "Apple_Terminal" ||
-    env.TERM_PROGRAM === "iTerm.app" ||
-    env.TERM_PROGRAM === "vscode" ||
-    env.TERM_PROGRAM === "Electron"
-  ) {
-    env.TERM_PROGRAM = "ghostty";
-  }
-  if (
-    !env.TERM_PROGRAM_VERSION ||
-    env.TERM_PROGRAM === "ghostty"
-  ) {
-    env.TERM_PROGRAM_VERSION = env.TERM_PROGRAM_VERSION || "1.1.0";
-  }
+  // Grok Build terminal brand (open-source contract): Ghostty-class enables
+  // native Cmd chords. Prefer pure resolveGrokTermProgramIdentity; override
+  // via VEFG_TERM_PROGRAM=ghostty|grokdesktop|kitty|wezterm.
+  const identity = resolveGrokTermProgramIdentity({
+    parentTermProgram: env.TERM_PROGRAM,
+    parentTermProgramVersion: env.TERM_PROGRAM_VERSION,
+    preferredBrand: process.env.VEFG_TERM_PROGRAM || null,
+  });
+  env.TERM_PROGRAM = identity.termProgram;
+  env.TERM_PROGRAM_VERSION = identity.termProgramVersion;
+  // Surface for diagnostics without polluting Grok's public env contract.
+  env.VEFG_GROK_TERM_IDENTITY = identity.reason;
 
   return env;
 }

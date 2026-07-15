@@ -69,6 +69,12 @@ const {
 } = require("./privacy-policy.cjs");
 const { formatDiagnosticSummary } = require("./diagnostics.cjs");
 const {
+  planGrokMultimodalPaste,
+  extractOsc52ClipboardPayloads,
+  buildGrokHostDiagnosticBlock,
+  resolveGrokTermProgramIdentity,
+} = require("./grok-host-policy.cjs");
+const {
   StabilityErrorBuffer,
   createOncePerRun,
   reportStabilityFault,
@@ -2152,17 +2158,11 @@ async function putScreenshotOnClipboardForGrok(filePath) {
 }
 
 /**
- * Paste into Grok TUI as multimodal when possible:
- * 1) image/file on OS clipboard → Ctrl+V so Grok attaches an image chip
- * 2) then bracketed-paste text context (DOM path, etc.)
+ * Paste into Grok TUI as multimodal using Grok Build host plan:
+ * image/file only on clipboard → Ctrl+V (+ Super+V on macOS) → then
+ * bracketed DOM text → restore image for manual ⌘V fallback.
+ * Delivery remains attempted/unconfirmed (Grok probes clipboard async).
  *
- * Grok docs: paste screenshots via Ctrl/Cmd+V creates image chips (not plain path text).
- *
- * @param {string} text
- * @param {string | null} screenshotPath
- * @returns {Promise<{ pasted: boolean, imageChip: boolean }>}
- */
-/**
  * @returns {Promise<{
  *   pasted: boolean,
  *   textPasted: boolean,
@@ -2193,20 +2193,20 @@ async function pasteToGrokMultimodal(
       rows.indexOf(item) === index,
     );
   const hasShot = screenshots.length > 0;
+  const textBody = typeof text === "string" ? text : "";
 
-  // Always refresh clipboard for manual fallback
   const writeClipboardBundle = () => {
     try {
       const image = hasShot
-        ? nativeImage.createFromPath(screenshotPath)
+        ? nativeImage.createFromPath(screenshots[screenshots.length - 1] || screenshotPath)
         : null;
       if (image && !image.isEmpty()) {
-        clipboard.write({ text, image });
+        clipboard.write({ text: textBody, image });
       } else {
-        clipboard.writeText(text);
+        clipboard.writeText(textBody);
       }
     } catch {
-      clipboard.writeText(text);
+      clipboard.writeText(textBody);
     }
   };
 
@@ -2233,43 +2233,69 @@ async function pasteToGrokMultimodal(
   }
 
   if (targetSessionId === activeTerminalId) focusMainTerminal();
-  await delay(90);
+
+  const plan = planGrokMultimodalPaste({
+    platform: process.platform,
+    imageCount: screenshots.length,
+    hasText: Boolean(textBody),
+  });
 
   let imagePrepared = false;
   let imageChipAttempted = false;
   let imageAttachmentsAttempted = 0;
-  if (hasShot) {
-    for (const imagePath of screenshots) {
-      const prepared = await putScreenshotOnClipboardForGrok(imagePath);
-      imagePrepared = imagePrepared || prepared;
-      if (!prepared) continue;
-      await delay(60);
-      try {
-        const attempted = Boolean(termSession?.write("\x16"));
-        imageChipAttempted = imageChipAttempted || attempted;
-        if (attempted) imageAttachmentsAttempted += 1;
-        await delay(280);
-      } catch (err) {
-        console.warn("Ctrl+V inject failed:", err);
+  let textPasted = false;
+  let textPasteAttempted = false;
+
+  for (const step of plan.steps) {
+    try {
+      if (step.kind === "delay") {
+        await delay(step.ms || 0);
+        continue;
       }
+      if (step.kind === "clipboard-image-only") {
+        const imagePath = screenshots[step.imageIndex ?? 0];
+        if (!imagePath) continue;
+        const prepared = await putScreenshotOnClipboardForGrok(imagePath);
+        imagePrepared = imagePrepared || prepared;
+        continue;
+      }
+      if (step.kind === "write" && step.sequence) {
+        const attempted = Boolean(termSession?.write(step.sequence));
+        if (
+          step.reason === "ctrl-v-paste" ||
+          step.reason === "super-v-paste"
+        ) {
+          imageChipAttempted = imageChipAttempted || attempted;
+          if (attempted && step.reason === "ctrl-v-paste") {
+            imageAttachmentsAttempted += 1;
+          }
+        }
+        continue;
+      }
+      if (step.kind === "bracketed-paste-text") {
+        textPasteAttempted = true;
+        textPasted = Boolean(termSession?.paste(textBody));
+        continue;
+      }
+      if (step.kind === "clipboard-image-restore") {
+        const imagePath =
+          screenshots[step.imageIndex ?? screenshots.length - 1];
+        if (imagePath) await putScreenshotOnClipboardForGrok(imagePath);
+        continue;
+      }
+    } catch (err) {
+      console.warn("paste plan step failed:", step.kind, err);
     }
   }
 
-  let textPasted = false;
-  try {
-    textPasted = Boolean(termSession?.paste(text));
-    await delay(40);
-  } catch (err) {
-    console.warn("text paste failed:", err);
-    textPasted = false;
+  // If plan had no images, still leave text clipboard for manual fallback
+  if (!hasShot && textBody) {
+    try {
+      clipboard.writeText(textBody);
+    } catch {
+      /* ignore */
+    }
   }
-
-  // Keep a real file/image on the clipboard after the automatic attempt so
-  // the operator-facing “press ⌘V if needed” fallback remains truthful.
-  if (hasShot) {
-    await putScreenshotOnClipboardForGrok(screenshots[screenshots.length - 1]);
-  }
-  else writeClipboardBundle();
 
   const status = buildPasteStatus({
     locale: uiLocale,
@@ -2277,7 +2303,7 @@ async function pasteToGrokMultimodal(
     shellAlive: true,
     grokRunning: true,
     grokLaunchRequested: true,
-    textPasteAttempted: true,
+    textPasteAttempted: textPasteAttempted || Boolean(textBody),
     textPasted,
     imagePrepared,
     imageChipAttempted,
@@ -2289,6 +2315,7 @@ async function pasteToGrokMultimodal(
     terminalState: "grok",
     grokRunning: true,
     imageAttachmentsAttempted,
+    pastePlanSteps: plan.steps.length,
   };
 }
 
@@ -3272,8 +3299,18 @@ function createTerminalSlot(opts = {}) {
   }
   const pty = new TerminalSession({
     cwd: meta.cwd,
-    onData: (data) =>
-      sendToRenderer("terminal:data", { sessionId: meta.id, data }),
+    onData: (data) => {
+      // Best-effort: Grok OSC 52 copy → system clipboard (outer host duty)
+      try {
+        const oscHits = extractOsc52ClipboardPayloads(data);
+        for (const hit of oscHits) {
+          if (hit.text) clipboard.writeText(hit.text);
+        }
+      } catch {
+        /* ignore clipboard race */
+      }
+      sendToRenderer("terminal:data", { sessionId: meta.id, data });
+    },
     onExit: (code, _signal, mode) => {
       // Soft-degrade: never throw; mark tab dead and buffer non-zero exits as info/expected.
       try {
@@ -3747,6 +3784,14 @@ function registerIpc() {
         : null,
       captureInFlight,
     });
+    const grokHost = buildGrokHostDiagnosticBlock({
+      identity: resolveGrokTermProgramIdentity({
+        parentTermProgram: process.env.TERM_PROGRAM,
+        parentTermProgramVersion: process.env.TERM_PROGRAM_VERSION,
+        preferredBrand: process.env.VEFG_TERM_PROGRAM || null,
+      }),
+      platform: process.platform,
+    });
     const text = formatDiagnosticSummary({
       appVersion: app.getVersion(),
       grokBinaryFound: bin.ok,
@@ -3763,6 +3808,7 @@ function registerIpc() {
       captureDir: CAPTURE_DIR,
       recentErrors,
       health,
+      grokHost,
     });
     clipboard.writeText(text);
     return { ok: true };

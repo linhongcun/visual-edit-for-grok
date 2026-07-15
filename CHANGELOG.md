@@ -2,6 +2,17 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.8.16] — 2026-07-16
+
+### Grok Build host adaptation (identity + multimodal paste + diagnostics)
+
+- Pure `electron/grok-host-policy.cjs`: `resolveGrokTermProgramIdentity`, `planGrokMultimodalPaste` (image-only clipboard → Ctrl+V + Super+V on macOS → DOM text → restore image), OSC 52 extract
+- PTY env uses identity policy (default Ghostty spoof; `VEFG_TERM_PROGRAM` override)
+- Multimodal deliver follows paste plan steps (no mixed auto clipboard write for image path)
+- Diagnostics `grokHost` block + `/terminal-setup` operator hint; OSC 52 from Grok → system clipboard (best-effort)
+- Inventory: `docs/GROK-BUILD-ADAPTATION.md`
+- Out of scope: ACP-as-main-path, headless-primary product, forking Grok sources
+
 ## [0.8.15] — 2026-07-12
 
 ### Fix WebGL first-load attach guard

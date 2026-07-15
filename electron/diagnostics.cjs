@@ -41,6 +41,26 @@ function buildDiagnosticSummary(input = {}) {
       binaryFound: Boolean(input.grokBinaryFound),
       activeSessionId: String(input.activeSessionId || "").slice(-8) || null,
     },
+    // Grok Build host adaptation (identity + /terminal-setup hint)
+    grokHost:
+      input.grokHost && typeof input.grokHost === "object"
+        ? {
+            termProgram: String(input.grokHost.termProgram || "").slice(0, 40),
+            termProgramVersion: String(
+              input.grokHost.termProgramVersion || "",
+            ).slice(0, 32),
+            identityReason: String(input.grokHost.identityReason || "").slice(
+              0,
+              40,
+            ),
+            spoofed: Boolean(input.grokHost.spoofed),
+            pasteCtrlV: Boolean(input.grokHost.pasteCtrlV),
+            pasteSuperV: Boolean(input.grokHost.pasteSuperV),
+            terminalSetupHint: String(
+              input.grokHost.terminalSetupHint || "",
+            ).slice(0, 240),
+          }
+        : undefined,
     preview: {
       url: sanitizeDiagnosticUrl(input.preview?.url),
       loading: Boolean(input.preview?.loading),
