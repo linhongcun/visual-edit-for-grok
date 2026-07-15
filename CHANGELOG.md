@@ -2,6 +2,13 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.8.19] — 2026-07-16
+
+### Fix OSC 52 mid-header chunk split
+
+- `retainOsc52Carry` keeps a proper prefix of `ESC]52;` so frames split as `\x1b]5` + `2;c;…` still decode
+- Unit tests for mid-header splits
+
 ## [0.8.18] — 2026-07-16
 
 ### Grok host reliability polish (honest fail paths, OSC 52 stream, delays)

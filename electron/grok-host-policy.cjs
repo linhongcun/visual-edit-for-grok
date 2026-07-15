@@ -425,6 +425,9 @@ function extractOsc52ClipboardPayloads(chunk) {
   return out;
 }
 
+/** OSC 52 introducer — frames may split mid-marker across PTY chunks. */
+const OSC52_MARKER = "\x1b]52;";
+
 /**
  * Strip complete OSC 52 frames; keep incomplete trailing start for next chunk.
  * @param {string} s
@@ -438,8 +441,34 @@ function stripCompleteOsc52Frames(s) {
 }
 
 /**
+ * Retain only the carry needed for a future OSC 52 frame:
+ * - full incomplete frame starting at last ESC]52;
+ * - or longest suffix that is a proper prefix of ESC]52; (mid-header split)
+ *
+ * @param {string} buffer
+ * @returns {string}
+ */
+function retainOsc52Carry(buffer) {
+  const s = String(buffer || "");
+  const start = s.lastIndexOf(OSC52_MARKER);
+  if (start >= 0) {
+    return s.slice(start);
+  }
+  // Mid-header: e.g. "\x1b]5" must survive until "2;c;…\x07" arrives
+  const maxPrefix = OSC52_MARKER.length - 1;
+  for (let len = Math.min(s.length, maxPrefix); len >= 1; len -= 1) {
+    const suffix = s.slice(-len);
+    if (OSC52_MARKER.startsWith(suffix)) {
+      return suffix;
+    }
+  }
+  return "";
+}
+
+/**
  * Push a PTY chunk into a carry buffer and extract complete OSC 52 payloads.
- * Handles frames split across chunks. Incomplete prefix is retained (bounded).
+ * Handles frames split across chunks (including mid ESC]52; header).
+ * Incomplete prefix is retained (bounded).
  *
  * @param {{ buffer?: string, maxBuffer?: number } | null | undefined} state
  * @param {string} chunk
@@ -461,12 +490,7 @@ function pushOsc52Stream(state, chunk) {
   if (payloads.length > 0) {
     buffer = stripCompleteOsc52Frames(buffer);
   }
-  const start = buffer.lastIndexOf("\x1b]52;");
-  if (start < 0) {
-    buffer = "";
-  } else if (start > 0) {
-    buffer = buffer.slice(start);
-  }
+  buffer = retainOsc52Carry(buffer);
   return { payloads, buffer };
 }
 
@@ -521,5 +545,7 @@ module.exports = {
   extractOsc52ClipboardPayloads,
   pushOsc52Stream,
   stripCompleteOsc52Frames,
+  retainOsc52Carry,
+  OSC52_MARKER,
   buildGrokHostDiagnosticBlock,
 };

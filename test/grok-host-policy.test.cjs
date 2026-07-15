@@ -207,6 +207,48 @@ function testOsc52StreamSplitChunks() {
   assert.strictEqual(one.payloads[0].text, text);
 }
 
+/**
+ * Skeptic regression: split mid ESC]52; header must not drop the frame.
+ * e.g. chunk1='\x1b]5' + chunk2='2;c;<b64>\x07'
+ */
+function testOsc52StreamMidHeaderSplit() {
+  const text = "mid-header-ok";
+  const b64 = Buffer.from(text, "utf8").toString("base64");
+  // Explicit mid-marker splits (not only mid-body)
+  const cases = [
+    ["\x1b", `]52;c;${b64}\x07`],
+    ["\x1b]", `52;c;${b64}\x07`],
+    ["\x1b]5", `2;c;${b64}\x07`],
+    ["\x1b]52", `;c;${b64}\x07`],
+    ["\x1b]52;", `c;${b64}\x07`],
+  ];
+  for (const [c1, c2] of cases) {
+    const a = pushOsc52Stream({ buffer: "" }, c1);
+    assert.strictEqual(
+      a.payloads.length,
+      0,
+      `no payload after partial ${JSON.stringify(c1)}`,
+    );
+    assert.ok(
+      a.buffer.length > 0,
+      `must retain partial header after ${JSON.stringify(c1)}, got empty buffer`,
+    );
+    const b = pushOsc52Stream({ buffer: a.buffer }, c2);
+    assert.strictEqual(
+      b.payloads.length,
+      1,
+      `decode failed for split ${JSON.stringify(c1)}|${JSON.stringify(c2)}`,
+    );
+    assert.strictEqual(b.payloads[0].text, text);
+  }
+
+  // Noise + partial header still carries
+  const n1 = pushOsc52Stream({ buffer: "" }, "noise\x1b]5");
+  assert.strictEqual(n1.buffer, "\x1b]5");
+  const n2 = pushOsc52Stream({ buffer: n1.buffer }, `2;c;${b64}\x07`);
+  assert.strictEqual(n2.payloads[0].text, text);
+}
+
 function testPasteDelayClamps() {
   const d = resolvePasteDelayMs();
   assert.strictEqual(d.focusSettleMs, DEFAULT_PASTE_DELAYS_MS.focusSettleMs);
@@ -286,6 +328,7 @@ function run() {
     testMayExecutePerImageIndex,
     testOsc52Extract,
     testOsc52StreamSplitChunks,
+    testOsc52StreamMidHeaderSplit,
     testPasteDelayClamps,
     testDiagnosticBlock,
     testMainAndTerminalWiring,
