@@ -37,11 +37,13 @@ Download the current installer from [GitHub Releases](https://github.com/linhong
 ### Requirements
 
 - macOS on **Apple Silicon** (`arm64`)
-- **Grok Build CLI** available locally (resolved in order):
+- **Grok Build CLI** available locally ([xai-org/grok-build](https://github.com/xai-org/grok-build); install via [x.ai/cli](https://x.ai/cli)). Resolved in order:
   1. `$GROK_PATH`
   2. `~/.grok/bin/grok`
   3. `~/.local/bin/grok`
   4. `/usr/local/bin/grok` or `/opt/homebrew/bin/grok`
+
+Host adaptation notes (terminal identity, multimodal paste): [`docs/GROK-BUILD-ADAPTATION.md`](docs/GROK-BUILD-ADAPTATION.md).
 
 ### First launch / Gatekeeper
 

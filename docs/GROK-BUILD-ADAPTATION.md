@@ -1,8 +1,10 @@
 # Grok Build → Visual Capture for Grok — host adaptation
 
-**Reference (read-only):** `/Users/hongcunlin/GitHubProjects/grok-build`  
+**Upstream (open source):** [https://github.com/xai-org/grok-build](https://github.com/xai-org/grok-build)  
+**Local reference (read-only checkout):** `/Users/hongcunlin/GitHubProjects/grok-build`  
 (user-guide `21-terminal-support.md`, `03-keyboard-shortcuts.md`, `15-agent-mode.md`; terminal brand map in `xai-grok-pager-render`).  
-**Ideas only** — do not fork/vendor Grok Rust sources.  
+**Docs / product:** [docs.x.ai/build](https://docs.x.ai/build/overview) · [x.ai/cli](https://x.ai/cli)  
+**Ideas only** — do not fork/vendor Grok Rust sources into this tree.  
 **Product boundary:** embedded **Grok TUI** sidecar + secure preview. Not an ACP chat host; not headless-primary agent product.
 
 ## Capability map

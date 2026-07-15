@@ -3,6 +3,7 @@
  * No Electron / node-pty — unit-tested.
  *
  * Contracts from open-source Grok Build (ideas only, no source copy):
+ * https://github.com/xai-org/grok-build
  * - TERM_PROGRAM brand detection (ghostty enables native Cmd chords)
  * - is_paste_key: Ctrl+V and Super+V
  * - Image-then-text clipboard ordering for reliable image chips
