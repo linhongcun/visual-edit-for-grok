@@ -291,6 +291,25 @@ export default function App() {
   function requestTerminalFit() {
     setTermFitNonce((n) => n + 1);
   }
+
+  /**
+   * After maximize / collapse / layout:bounds, React width may not be painted yet.
+   * Re-fit xterm + PTY on several frames so Grok reflows to the full pane width
+   * (avoids half-screen black void after ⌘⇧M).
+   */
+  function scheduleTerminalFitAfterLayout() {
+    requestTerminalFit();
+    requestAnimationFrame(() => {
+      requestTerminalFit();
+      requestAnimationFrame(() => requestTerminalFit());
+    });
+    window.setTimeout(() => requestTerminalFit(), 48);
+    window.setTimeout(() => requestTerminalFit(), 120);
+    window.setTimeout(() => requestTerminalFit(), 280);
+  }
+
+  const lastLayoutWidthRef = useRef<number | null>(null);
+  const lastLayoutCollapsedRef = useRef<boolean | null>(null);
   const selectionRef = useRef<ElementSelection | null>(null);
   const screenshotPathRef = useRef<string | null>(null);
   const previewRef = useRef(preview);
@@ -930,13 +949,27 @@ export default function App() {
         const b = p as {
           terminalWidth?: number;
           previewCollapsed?: boolean;
+          contentWidth?: number;
         };
+        let layoutChanged = false;
         if (typeof b.previewCollapsed === "boolean") {
+          if (lastLayoutCollapsedRef.current !== b.previewCollapsed) {
+            layoutChanged = true;
+            lastLayoutCollapsedRef.current = b.previewCollapsed;
+          }
           setPreviewCollapsed(b.previewCollapsed);
           previewCollapsedRef.current = b.previewCollapsed;
         }
         if (!dragging.current && b.terminalWidth) {
+          if (lastLayoutWidthRef.current !== b.terminalWidth) {
+            layoutChanged = true;
+            lastLayoutWidthRef.current = b.terminalWidth;
+          }
           setTerminalWidth(b.terminalWidth);
+        }
+        // Window resize / maximize from main: reflow xterm + Grok cols
+        if (layoutChanged && !dragging.current) {
+          scheduleTerminalFitAfterLayout();
         }
       }),
       api.on("terminal:exit", (p) => {
@@ -1216,7 +1249,8 @@ export default function App() {
     if (!isElectron()) {
       setPreviewCollapsed(collapsed);
       previewCollapsedRef.current = collapsed;
-      requestAnimationFrame(() => requestTerminalFit());
+      lastLayoutCollapsedRef.current = collapsed;
+      scheduleTerminalFitAfterLayout();
       return;
     }
     try {
@@ -1229,8 +1263,12 @@ export default function App() {
       previewCollapsedRef.current = Boolean(
         bounds.previewCollapsed ?? collapsed,
       );
-      if (bounds.terminalWidth) setTerminalWidth(bounds.terminalWidth);
-      requestAnimationFrame(() => requestTerminalFit());
+      lastLayoutCollapsedRef.current = previewCollapsedRef.current;
+      if (bounds.terminalWidth) {
+        setTerminalWidth(bounds.terminalWidth);
+        lastLayoutWidthRef.current = bounds.terminalWidth;
+      }
+      scheduleTerminalFitAfterLayout();
     } catch (err) {
       toastError(err);
     }
@@ -1251,9 +1289,14 @@ export default function App() {
       if (typeof bounds.previewCollapsed === "boolean") {
         setPreviewCollapsed(bounds.previewCollapsed);
         previewCollapsedRef.current = bounds.previewCollapsed;
+        lastLayoutCollapsedRef.current = bounds.previewCollapsed;
       }
-      if (bounds.terminalWidth) setTerminalWidth(bounds.terminalWidth);
-      requestAnimationFrame(() => requestTerminalFit());
+      if (bounds.terminalWidth) {
+        setTerminalWidth(bounds.terminalWidth);
+        lastLayoutWidthRef.current = bounds.terminalWidth;
+      }
+      // Multi-frame fit: React width + xterm host measure after maximize
+      scheduleTerminalFitAfterLayout();
     } catch (err) {
       toastError(err);
     }
@@ -1615,14 +1658,14 @@ export default function App() {
             }
             // After layout flush, force xterm fit + PTY resize for Grok reflow
             if (force) {
-              requestAnimationFrame(() => requestTerminalFit());
+              scheduleTerminalFitAfterLayout();
             }
           })
           .catch(() => {
             // Keep the local split usable if the native view is closing.
           });
       } else if (force) {
-        requestAnimationFrame(() => requestTerminalFit());
+        scheduleTerminalFitAfterLayout();
       }
       return next;
     },

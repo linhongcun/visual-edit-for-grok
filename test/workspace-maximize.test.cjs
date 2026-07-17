@@ -234,6 +234,39 @@ function testMainWiresMaximizeAndRecovery() {
   );
 }
 
+/** Maximize must re-fit xterm after layout settles (responsive Grok cols). */
+function testUiWiresMaximizeReflow() {
+  const app = fs.readFileSync(
+    path.join(__dirname, "../src/App.tsx"),
+    "utf8",
+  );
+  const pane = fs.readFileSync(
+    path.join(__dirname, "../src/components/TerminalPane.tsx"),
+    "utf8",
+  );
+  assert.ok(
+    app.includes("scheduleTerminalFitAfterLayout"),
+    "App must schedule multi-frame terminal fit after maximize/collapse",
+  );
+  assert.ok(
+    /applyLayoutMaximize[\s\S]*scheduleTerminalFitAfterLayout/.test(app),
+    "applyLayoutMaximize must call scheduleTerminalFitAfterLayout",
+  );
+  assert.ok(
+    app.includes('api.on("layout:bounds"') || app.includes("layout:bounds"),
+    "layout:bounds handler required",
+  );
+  assert.ok(
+    /layout:bounds[\s\S]{0,800}scheduleTerminalFitAfterLayout/.test(app) ||
+      /layoutChanged[\s\S]{0,200}scheduleTerminalFitAfterLayout/.test(app),
+    "layout:bounds width/collapse change must reflow terminal",
+  );
+  assert.ok(
+    /scheduleFit\s*\(\s*true\s*,/.test(pane),
+    "TerminalPane ResizeObserver must force-fit so PTY cols update on maximize",
+  );
+}
+
 function run() {
   const tests = [
     testMaximizeTerminalThenRestore,
@@ -250,6 +283,7 @@ function run() {
     testPreviewRecoveryForceAfterCrashShape,
     testPreviewRecoveryForceStillRespectsBudget,
     testMainWiresMaximizeAndRecovery,
+    testUiWiresMaximizeReflow,
   ];
   let failed = 0;
   for (const t of tests) {

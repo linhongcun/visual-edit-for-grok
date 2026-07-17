@@ -2,6 +2,14 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.8.21] — 2026-07-16
+
+### Fix maximize / layout reflow for Grok TUI
+
+- `scheduleTerminalFitAfterLayout`: multi-frame + delayed xterm fit after maximize, collapse, and splitter settle
+- `layout:bounds` triggers fit when terminal width or preview collapsed changes (window resize)
+- TerminalPane ResizeObserver always force-syncs PTY cols/rows so Grok reflows full width (no half-screen black void)
+
 ## [0.8.20] — 2026-07-16
 
 ### Fix Aim/web selection paste into Grok input

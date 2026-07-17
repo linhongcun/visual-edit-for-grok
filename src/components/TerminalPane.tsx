@@ -788,8 +788,9 @@ export default function TerminalPane({
 
     void start();
 
+    // force=true: maximize / collapse must always push new cols to PTY so Grok reflows
     const ro = new ResizeObserver(() => {
-      scheduleFit(false, 40);
+      scheduleFit(true, 32);
     });
     ro.observe(hostRef.current);
 
