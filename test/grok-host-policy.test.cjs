@@ -13,6 +13,7 @@ const {
   mayExecuteGrokPasteStep,
   extractOsc52ClipboardPayloads,
   pushOsc52Stream,
+  shouldApplyOsc52ToSystemClipboard,
   buildGrokHostDiagnosticBlock,
   DEFAULT_TERM_PROGRAM,
   DEFAULT_PASTE_DELAYS_MS,
@@ -52,14 +53,22 @@ function testIdentityPreferredGrokDesktop() {
   assert.strictEqual(r.reason, "preferred-override");
 }
 
-function testPasteKeysDarwinHasSuper() {
+function testPasteKeysDarwinCtrlOnlyByDefault() {
+  // Dual Super+V was racing Grok's clipboard probe and breaking DOM paste
   const k = resolveGrokPasteKeySequences({ platform: "darwin" });
   assert.strictEqual(k.ctrlV, SEQ_CTRL_V);
-  assert.strictEqual(k.superV, SEQ_SUPER_V);
+  assert.strictEqual(k.useSuperV, false);
+  assert.strictEqual(k.superV, null);
+}
+
+function testPasteKeysDarwinSuperOptIn() {
+  const k = resolveGrokPasteKeySequences({
+    platform: "darwin",
+    preferSuperV: true,
+  });
   assert.strictEqual(k.useSuperV, true);
-  // Super+V is Kitty CSI-u for codepoint 'v' with super mod
+  assert.strictEqual(k.superV, SEQ_SUPER_V);
   assert.ok(k.superV.includes("118"));
-  assert.ok(k.superV.includes("9u") || k.superV.endsWith("9u"));
 }
 
 function testPasteKeysLinuxCtrlOnly() {
@@ -79,21 +88,32 @@ function testPlanImageThenTextOrdering() {
   const imgIdx = kinds.indexOf("clipboard-image-only");
   const ctrlIdx = kinds.indexOf("write");
   const textIdx = kinds.indexOf("bracketed-paste-text");
-  const restoreIdx = kinds.indexOf("clipboard-image-restore");
+  const bundleIdx = kinds.indexOf("clipboard-text-and-image");
   assert.ok(imgIdx >= 0);
   assert.ok(ctrlIdx > imgIdx);
   assert.ok(textIdx > ctrlIdx, "text must come after image paste keys");
-  assert.ok(restoreIdx > textIdx);
+  assert.ok(bundleIdx > textIdx, "manual fallback bundle after text");
 
   const writes = plan.steps.filter((s) => s.kind === "write");
+  assert.strictEqual(writes.length, 1, "default: Ctrl+V only (no Super+V dual inject)");
   assert.strictEqual(writes[0].sequence, SEQ_CTRL_V);
   assert.strictEqual(writes[0].reason, "ctrl-v-paste");
-  assert.strictEqual(writes[1].sequence, SEQ_SUPER_V);
-  assert.strictEqual(writes[1].reason, "super-v-paste");
+  assert.ok(!plan.steps.some((s) => s.reason === "super-v-paste"));
 
-  // Never plan a mixed clipboard-text+image step for auto path
-  assert.ok(!kinds.includes("clipboard-bundle-mixed"));
+  // Image-only phase before text; final bundle is text+image for manual ⌘V
   assert.ok(plan.terminalSetupHint.includes("/terminal-setup"));
+}
+
+function testPlanPreferSuperVAddsSecondKey() {
+  const plan = planGrokMultimodalPaste({
+    platform: "darwin",
+    imageCount: 1,
+    hasText: false,
+    preferSuperV: true,
+  });
+  const writes = plan.steps.filter((s) => s.kind === "write");
+  assert.strictEqual(writes.length, 2);
+  assert.strictEqual(writes[1].reason, "super-v-paste");
 }
 
 function testPlanTwoImagesTwoCtrlV() {
@@ -125,9 +145,9 @@ function testMayExecuteSkipsWritesWhenPrepFailed() {
   const prepMap = new Map();
   // No prep recorded yet → image-scoped writes blocked
   const ctrl = plan.steps.find((s) => s.reason === "ctrl-v-paste");
-  const superV = plan.steps.find((s) => s.reason === "super-v-paste");
   const text = plan.steps.find((s) => s.kind === "bracketed-paste-text");
-  assert.ok(ctrl && superV && text);
+  const bundle = plan.steps.find((s) => s.kind === "clipboard-text-and-image");
+  assert.ok(ctrl && text && bundle);
 
   assert.strictEqual(
     mayExecuteGrokPasteStep(ctrl, prepMap).ok,
@@ -135,15 +155,14 @@ function testMayExecuteSkipsWritesWhenPrepFailed() {
     "ctrl-v blocked before prep",
   );
   assert.strictEqual(mayExecuteGrokPasteStep(ctrl, prepMap).reason, "prep-failed");
-  assert.strictEqual(mayExecuteGrokPasteStep(superV, prepMap).ok, false);
 
-  // Text path always allowed
+  // Text path + final clipboard bundle always allowed
   assert.strictEqual(mayExecuteGrokPasteStep(text, prepMap).ok, true);
+  assert.strictEqual(mayExecuteGrokPasteStep(bundle, prepMap).ok, true);
 
   // Prep success unlocks paste keys for that index only
   prepMap.set(0, true);
   assert.strictEqual(mayExecuteGrokPasteStep(ctrl, prepMap).ok, true);
-  assert.strictEqual(mayExecuteGrokPasteStep(superV, prepMap).ok, true);
 
   // Prep failure stays blocked
   prepMap.set(0, false);
@@ -265,6 +284,39 @@ function testPasteDelayClamps() {
   assert.strictEqual(focus.ms, 50);
 }
 
+function testOsc52ApplyGate() {
+  assert.strictEqual(
+    shouldApplyOsc52ToSystemClipboard({ text: "" }).apply,
+    false,
+  );
+  assert.strictEqual(
+    shouldApplyOsc52ToSystemClipboard({ text: "   " }).apply,
+    false,
+  );
+  assert.strictEqual(
+    shouldApplyOsc52ToSystemClipboard({ text: "hello" }).apply,
+    true,
+  );
+  assert.strictEqual(
+    shouldApplyOsc52ToSystemClipboard({
+      text: "hello",
+      lastWriteAt: 1000,
+      now: 1100,
+      minIntervalMs: 400,
+    }).apply,
+    false,
+  );
+  assert.strictEqual(
+    shouldApplyOsc52ToSystemClipboard({
+      text: "hello",
+      lastWriteAt: 1000,
+      now: 1500,
+      minIntervalMs: 400,
+    }).apply,
+    true,
+  );
+}
+
 function testDiagnosticBlock() {
   const id = resolveGrokTermProgramIdentity({
     parentTermProgram: "Electron",
@@ -275,7 +327,8 @@ function testDiagnosticBlock() {
   });
   assert.strictEqual(block.termProgram, "ghostty");
   assert.strictEqual(block.pasteCtrlV, true);
-  assert.strictEqual(block.pasteSuperV, true);
+  // Super+V is opt-in only (default false — dual inject broke DOM paste)
+  assert.strictEqual(block.pasteSuperV, false);
   assert.strictEqual(block.pastePrepGate, true);
   assert.strictEqual(block.osc52Stream, true);
   assert.ok(block.pasteDelaysMs);
@@ -300,7 +353,10 @@ function testMainAndTerminalWiring() {
   assert.ok(main.includes("mayExecuteGrokPasteStep"));
   assert.ok(main.includes("prepOkByIndex"));
   assert.ok(main.includes("pushOsc52Stream"));
+  assert.ok(main.includes("shouldApplyOsc52ToSystemClipboard"));
   assert.ok(main.includes("imagesWanted"));
+  assert.ok(main.includes("clipboard-text-and-image"));
+  assert.ok(main.includes("clipboard-sanitized-write"));
   assert.ok(term.includes("resolveGrokTermProgramIdentity"));
   assert.ok(diag.includes("grokHost") || main.includes("grokHost"));
   assert.ok(main.includes("clipboard-image-only") || main.includes("plan.steps"));
@@ -320,9 +376,11 @@ function run() {
     testIdentitySpoofsWeakParents,
     testIdentityKeepsGhosttyParent,
     testIdentityPreferredGrokDesktop,
-    testPasteKeysDarwinHasSuper,
+    testPasteKeysDarwinCtrlOnlyByDefault,
+    testPasteKeysDarwinSuperOptIn,
     testPasteKeysLinuxCtrlOnly,
     testPlanImageThenTextOrdering,
+    testPlanPreferSuperVAddsSecondKey,
     testPlanTwoImagesTwoCtrlV,
     testMayExecuteSkipsWritesWhenPrepFailed,
     testMayExecutePerImageIndex,
@@ -330,6 +388,7 @@ function run() {
     testOsc52StreamSplitChunks,
     testOsc52StreamMidHeaderSplit,
     testPasteDelayClamps,
+    testOsc52ApplyGate,
     testDiagnosticBlock,
     testMainAndTerminalWiring,
   ];

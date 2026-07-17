@@ -2,6 +2,15 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.8.20] — 2026-07-16
+
+### Fix Aim/web selection paste into Grok input
+
+- Default paste inject is **Ctrl+V only** (dual Super+V raced Grok clipboard probe and blocked following DOM/bracketed text)
+- After deliver, leave **text + image** on the OS clipboard (not image-only) so manual ⌘V can paste content
+- OSC 52 → system clipboard is throttled / skips empty so Grok redraw does not wipe text copied from the preview
+- Preview allows `clipboard-sanitized-write` so page selection can reach the system clipboard
+
 ## [0.8.19] — 2026-07-16
 
 ### Fix OSC 52 mid-header chunk split

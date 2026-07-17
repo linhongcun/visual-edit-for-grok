@@ -163,12 +163,23 @@ function resolveGrokTermProgramIdentity(input = {}) {
 
 /**
  * Sequences Grok accepts as paste keys (mirror is_paste_key CONTROL|SUPER + v).
- * @param {{ platform?: string }} [input]
+ *
+ * Default inject is **Ctrl+V only**. Dual Super+V after Ctrl+V races Grok's
+ * async clipboard probe and can leave the composer unable to accept the
+ * following bracketed DOM text (user-visible: Aim selection never lands).
+ * Super+V remains available via preferSuperV / VEFG_PASTE_SUPER_V=1.
+ *
+ * @param {{ platform?: string, preferSuperV?: boolean }} [input]
  * @returns {{ ctrlV: string, superV: string | null, useSuperV: boolean }}
  */
 function resolveGrokPasteKeySequences(input = {}) {
   const platform = String(input.platform || process.platform || "darwin");
-  const useSuperV = platform === "darwin";
+  const envOn =
+    process.env.VEFG_PASTE_SUPER_V === "1" ||
+    process.env.VEFG_PASTE_SUPER_V === "true";
+  const preferSuperV = Boolean(input.preferSuperV) || envOn;
+  // Only meaningful on macOS (Cmd+V); never default-on.
+  const useSuperV = preferSuperV && platform === "darwin";
   return {
     ctrlV: SEQ_CTRL_V,
     superV: useSuperV ? SEQ_SUPER_V : null,
@@ -189,6 +200,7 @@ function resolveGrokPasteKeySequences(input = {}) {
  *   afterSuperVMs?: number,
  *   beforeTextMs?: number,
  *   afterTextMs?: number,
+ *   preferSuperV?: boolean,
  * }} [input]
  * @returns {{
  *   steps: Array<{
@@ -217,6 +229,7 @@ function planGrokMultimodalPaste(input = {}) {
   const afterTextMs = delays.afterTextMs;
   const pasteKeys = resolveGrokPasteKeySequences({
     platform: input.platform,
+    preferSuperV: input.preferSuperV,
   });
 
   /** @type {Array<{ kind: string, ms?: number, sequence?: string, imageIndex?: number, reason: string }>} */
@@ -286,11 +299,13 @@ function planGrokMultimodalPaste(input = {}) {
     });
   }
 
-  if (imageCount > 0) {
+  // Leave text (+ optional last image) on OS clipboard for manual ⌘V.
+  // Image-only restore wiped DOM text so users could not paste "content".
+  if (hasText || imageCount > 0) {
     steps.push({
-      kind: "clipboard-image-restore",
-      imageIndex: imageCount - 1,
-      reason: "manual-cmdv-fallback",
+      kind: "clipboard-text-and-image",
+      imageIndex: imageCount > 0 ? imageCount - 1 : undefined,
+      reason: "manual-fallback-bundle",
     });
   }
 
@@ -341,6 +356,11 @@ function mayExecuteGrokPasteStep(step, prepOkByIndex) {
     return { ok: true, reason: "prep" };
   }
 
+  // Final text+image clipboard bundle always runs (text path does not need prep)
+  if (kind === "clipboard-text-and-image") {
+    return { ok: true, reason: "manual-fallback" };
+  }
+
   // Image-scoped steps require prepOk for that index
   if (
     typeof step.imageIndex === "number" &&
@@ -357,6 +377,46 @@ function mayExecuteGrokPasteStep(step, prepOkByIndex) {
   }
 
   return { ok: true, reason: "ok" };
+}
+
+/**
+ * Whether an OSC 52 payload should update the system clipboard.
+ * Skips empty/query payloads and rate-limits so Grok redraw noise does not
+ * clobber text the user just copied from the preview page.
+ *
+ * @param {{
+ *   text?: string,
+ *   lastWriteAt?: number,
+ *   now?: number,
+ *   minIntervalMs?: number,
+ *   maxChars?: number,
+ * }} [input]
+ * @returns {{ apply: boolean, reason: string }}
+ */
+function shouldApplyOsc52ToSystemClipboard(input = {}) {
+  const text = String(input.text || "");
+  if (!text || !text.trim()) {
+    return { apply: false, reason: "empty" };
+  }
+  const maxChars = Math.max(
+    1,
+    Math.min(2_000_000, Number(input.maxChars) || 500_000),
+  );
+  if (text.length > maxChars) {
+    return { apply: false, reason: "too-large" };
+  }
+  const now = Number.isFinite(Number(input.now))
+    ? Number(input.now)
+    : Date.now();
+  const last = Number(input.lastWriteAt) || 0;
+  const minIntervalMs = Math.max(
+    0,
+    Math.min(10_000, Number(input.minIntervalMs) || 400),
+  );
+  if (last > 0 && now - last < minIntervalMs) {
+    return { apply: false, reason: "throttled" };
+  }
+  return { apply: true, reason: "ok" };
 }
 
 /**
@@ -546,6 +606,7 @@ module.exports = {
   pushOsc52Stream,
   stripCompleteOsc52Frames,
   retainOsc52Carry,
+  shouldApplyOsc52ToSystemClipboard,
   OSC52_MARKER,
   buildGrokHostDiagnosticBlock,
 };

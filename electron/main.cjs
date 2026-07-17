@@ -72,9 +72,12 @@ const {
   planGrokMultimodalPaste,
   mayExecuteGrokPasteStep,
   pushOsc52Stream,
+  shouldApplyOsc52ToSystemClipboard,
   buildGrokHostDiagnosticBlock,
   resolveGrokTermProgramIdentity,
 } = require("./grok-host-policy.cjs");
+/** Throttle OSC 52 → system clipboard so Grok redraw does not wipe user copies. */
+let lastOsc52ClipboardWriteAt = 0;
 const {
   StabilityErrorBuffer,
   createOncePerRun,
@@ -1435,13 +1438,20 @@ function createPreviewView() {
   mainWindow.contentView.addChildView(previewView);
   bindAppShortcuts(previewView.webContents);
 
-  // Aim and Frame require no website permissions. Keep embedded content from
-  // requesting clipboard, media, notifications, fullscreen, or other grants.
+  // Deny most website permissions. Allow sanitized clipboard write so pages
+  // (and Chromium edit commands) can put selected text on the OS clipboard
+  // for pasting into Grok — still deny clipboard-read (no page steal).
   const previewSession = previewView.webContents.session;
+  const allowPreviewClipboardWrite = (permission) =>
+    permission === "clipboard-sanitized-write";
   previewSession.setPermissionRequestHandler(
-    (_contents, _permission, callback) => callback(false),
+    (_contents, permission, callback) => {
+      callback(allowPreviewClipboardWrite(permission));
+    },
   );
-  previewSession.setPermissionCheckHandler(() => false);
+  previewSession.setPermissionCheckHandler((_wc, permission) =>
+    allowPreviewClipboardWrite(permission),
+  );
   if (!configuredPreviewSessions.has(previewSession)) {
     configuredPreviewSessions.add(previewSession);
     previewSession.on("will-download", (event, item) => {
@@ -2292,13 +2302,39 @@ async function pasteToGrokMultimodal(
         textPasted = Boolean(termSession?.paste(textBody));
         continue;
       }
-      if (step.kind === "clipboard-image-restore") {
-        const idx = Math.floor(
-          Number(step.imageIndex ?? screenshots.length - 1) || 0,
-        );
-        if (prepOkByIndex.get(idx) !== true) continue;
-        const imagePath = screenshots[idx];
-        if (imagePath) await putScreenshotOnClipboardForGrok(imagePath);
+      if (
+        step.kind === "clipboard-text-and-image" ||
+        step.kind === "clipboard-image-restore"
+      ) {
+        // Prefer text+image bundle so manual ⌘V can paste DOM content (and image)
+        try {
+          const idx =
+            step.imageIndex != null && Number.isFinite(Number(step.imageIndex))
+              ? Math.floor(Number(step.imageIndex))
+              : screenshots.length - 1;
+          const imagePath =
+            idx >= 0 && prepOkByIndex.get(idx) === true
+              ? screenshots[idx]
+              : null;
+          if (imagePath && fs.existsSync(imagePath)) {
+            const img = nativeImage.createFromPath(imagePath);
+            if (!img.isEmpty() && textBody) {
+              clipboard.write({ text: textBody, image: img });
+            } else if (!img.isEmpty()) {
+              clipboard.writeImage(img);
+            } else if (textBody) {
+              clipboard.writeText(textBody);
+            }
+          } else if (textBody) {
+            clipboard.writeText(textBody);
+          }
+        } catch {
+          try {
+            if (textBody) clipboard.writeText(textBody);
+          } catch {
+            /* ignore */
+          }
+        }
         continue;
       }
     } catch (err) {
@@ -2306,12 +2342,19 @@ async function pasteToGrokMultimodal(
     }
   }
 
-  // If plan had no images, still leave text clipboard for manual fallback
-  if (!hasShot && textBody) {
+  // Safety: always leave DOM/context text on clipboard after auto-deliver
+  if (textBody) {
     try {
-      clipboard.writeText(textBody);
+      const current = clipboard.readText();
+      if (!current || current.length < Math.min(40, textBody.length / 4)) {
+        clipboard.writeText(textBody);
+      }
     } catch {
-      /* ignore */
+      try {
+        clipboard.writeText(textBody);
+      } catch {
+        /* ignore */
+      }
     }
   }
 
@@ -3328,12 +3371,20 @@ function createTerminalSlot(opts = {}) {
   const pty = new TerminalSession({
     cwd: meta.cwd,
     onData: (data) => {
-      // Best-effort: Grok OSC 52 copy → system clipboard (stream-complete)
+      // Best-effort: Grok OSC 52 copy → system clipboard (stream-complete).
+      // Throttle + skip empty so terminal redraw does not wipe preview copies.
       try {
         const next = pushOsc52Stream({ buffer: osc52Buffer }, data);
         osc52Buffer = next.buffer;
         for (const hit of next.payloads) {
-          if (hit.text) clipboard.writeText(hit.text);
+          const gate = shouldApplyOsc52ToSystemClipboard({
+            text: hit.text,
+            lastWriteAt: lastOsc52ClipboardWriteAt,
+            now: Date.now(),
+          });
+          if (!gate.apply) continue;
+          clipboard.writeText(hit.text);
+          lastOsc52ClipboardWriteAt = Date.now();
         }
       } catch {
         /* ignore clipboard race */
