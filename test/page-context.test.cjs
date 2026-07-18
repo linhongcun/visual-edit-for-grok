@@ -71,6 +71,15 @@ function testEmptyGeometry() {
   assert.strictEqual(formatPageInfoBlock(null), "");
 }
 
+/** list(0) must return [] — not coerce via `||` to the default limit. */
+function testFaultRingListZeroMeansEmpty() {
+  const ring = new PageFaultRing({ maxSize: 5 });
+  ring.push({ kind: "console:error", message: "boom" });
+  ring.push({ kind: "console:warn", message: "soft" });
+  assert.deepStrictEqual(ring.list(0), []);
+  assert.strictEqual(ring.list(1).length, 1);
+}
+
 function testFaultRingCapAndScrub() {
   const ring = new PageFaultRing({ maxSize: 5 });
   assert.strictEqual(formatPageFaultsBlock(ring.list()), "");
@@ -231,6 +240,7 @@ function run() {
     testGeometryPixelsAboveBelow,
     testGeometryFromSelection,
     testEmptyGeometry,
+    testFaultRingListZeroMeansEmpty,
     testFaultRingCapAndScrub,
     testScrubFaultMessage,
     testPayloadFences,

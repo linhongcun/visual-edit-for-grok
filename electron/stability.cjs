@@ -10,6 +10,7 @@
  */
 
 const { sanitizeErrorText, sanitizeDiagnosticUrl } = require("./diagnostics.cjs");
+const { clampListLimit } = require("./clipboard-payload.cjs");
 
 const DEFAULT_RING_SIZE = 30;
 /** Default host op timeout (browser-use CDP / agent-browser tool spirit). */
@@ -366,8 +367,11 @@ class StabilityErrorBuffer {
    * @param {number} [limit]
    * @returns {StabilityErrorEntry[]}
    */
+  /** @param {number} [limit] explicit 0 → empty (not default via `||`) */
   list(limit = this.maxSize) {
-    const n = Math.max(0, Number(limit) || this.maxSize);
+    const n = clampListLimit(limit, this.maxSize, this.maxSize);
+    // Note: Array#slice(-0) === slice(0) === full array — must special-case 0
+    if (n === 0) return [];
     return this._entries.slice(-n).map((e) => ({ ...e }));
   }
 

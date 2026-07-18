@@ -154,6 +154,21 @@ function testMarkupGuardHandlesGreaterThanInAttributes() {
   assert.ok(snap.includes("link"), "legitimate link text kept");
 }
 
+/** maxNeighbors:0 must mean zero neighbors (not fall through `||` to default 6). */
+function testMaxNeighborsZeroMeansNone() {
+  const withNeighbors = buildAgentSnapshot(fixture, { maxNeighbors: 0 });
+  // Default fixture has neighbors "Home" / etc. — must be omitted when 0
+  assert.ok(withNeighbors.includes("Target:") || withNeighbors.includes("@e"));
+  assert.ok(
+    !withNeighbors.includes("Nearby:"),
+    "maxNeighbors:0 must omit Nearby section",
+  );
+  assert.ok(
+    !withNeighbors.includes("Home"),
+    "neighbor link text must not appear when maxNeighbors is 0",
+  );
+}
+
 function testHideScrollbarsDefaultOn() {
   assert.strictEqual(shouldHideScrollbarsForCapture({}), true);
   assert.strictEqual(shouldHideScrollbarsForCapture(null), true);
@@ -192,6 +207,7 @@ function run() {
     testAccessibleNamePrefersAria,
     testPayloadIncludesAgentSnapshotFence,
     testMarkupGuardHandlesGreaterThanInAttributes,
+    testMaxNeighborsZeroMeansNone,
     testHideScrollbarsDefaultOn,
     testMainWiresScrollbarHide,
   ];

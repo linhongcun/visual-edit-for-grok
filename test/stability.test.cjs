@@ -74,6 +74,16 @@ function testRingBufferDropsOldestAndScrubsSecrets() {
   assert.match(list[2].message, /REDACTED|api_key/i);
 }
 
+/** list(0) must return [] — not silently use default maxSize via `||`. */
+function testRingListZeroMeansEmpty() {
+  const buf = new StabilityErrorBuffer({ maxSize: 5 });
+  buf.push({ code: "a", message: "one", severity: "expected" });
+  buf.push({ code: "b", message: "two", severity: "expected" });
+  assert.deepStrictEqual(buf.list(0), []);
+  assert.strictEqual(buf.list(1).length, 1);
+  assert.strictEqual(buf.list(1)[0].code, "b");
+}
+
 function testRingCoalescesIdenticalTail() {
   const buf = new StabilityErrorBuffer({ maxSize: 5 });
   buf.push({ code: "x", message: "same", severity: "expected" });
@@ -246,6 +256,7 @@ function run() {
     testClassifyActionableUncaught,
     testClassifyActionableTypeError,
     testRingBufferDropsOldestAndScrubsSecrets,
+    testRingListZeroMeansEmpty,
     testRingCoalescesIdenticalTail,
     testOncePerRunThrottle,
     testReportStabilityFaultUsesBuffer,

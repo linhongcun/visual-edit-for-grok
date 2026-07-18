@@ -2,6 +2,15 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.8.23] — 2026-07-18
+
+### Follow-on hardening (same classes as 0.8.22 review)
+
+- **`numberOr` / `clampListLimit`:** explicit `0` no longer falls through `||` to defaults (`list(0)` empty; `maxNeighbors:0` omits Nearby)
+- **verify payload:** neutralize fence-breakers in summary/paths
+- **network fence lines:** fence-safe URL/text
+- **close-tab dialog:** cancel if window gone before/after confirm (no headless mutate)
+
 ## [0.8.22] — 2026-07-18
 
 ### Hardening pass (reviewed + fixed)

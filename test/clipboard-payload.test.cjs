@@ -259,6 +259,21 @@ function testPayloadPreservesMultilineIntentNewlines() {
   );
 }
 
+function testNumberOrAndClampListLimitRespectZero() {
+  const {
+    numberOr,
+    clampListLimit,
+  } = require("../electron/clipboard-payload.cjs");
+  assert.strictEqual(numberOr(0, 99), 0);
+  assert.strictEqual(numberOr(undefined, 99), 99);
+  assert.strictEqual(numberOr(null, 99), 99);
+  assert.strictEqual(numberOr("", 99), 99);
+  assert.strictEqual(numberOr("nope", 99), 99);
+  assert.strictEqual(clampListLimit(0, 8, 20), 0);
+  assert.strictEqual(clampListLimit(undefined, 8, 20), 8);
+  assert.strictEqual(clampListLimit(100, 8, 20), 20);
+}
+
 function run() {
   const tests = [
     testEmptyIntentNoStyleDiffs,
@@ -272,6 +287,7 @@ function run() {
     testPayloadStripsTerminalControlInjection,
     testPayloadNeutralizesBacktickRunsThatCouldForgeFences,
     testPayloadPreservesMultilineIntentNewlines,
+    testNumberOrAndClampListLimitRespectZero,
   ];
   let failed = 0;
   for (const t of tests) {

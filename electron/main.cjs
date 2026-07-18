@@ -3507,6 +3507,10 @@ async function closeTerminalSlot(sessionId, opts = {}) {
   if (!opts.force && shouldConfirmCloseTab({ grokRunning })) {
     const win =
       mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+    // No live window to attach dialog → cancel (same spirit as project:pick-cwd)
+    if (!win) {
+      return { canceled: true, ...broadcastTerminalSessions() };
+    }
     const confirmation = await dialog.showMessageBox(win, {
       type: "warning",
       title: tr("term.closeGrokTitle"),
@@ -3520,6 +3524,10 @@ async function closeTerminalSlot(sessionId, opts = {}) {
       noLink: true,
     });
     if (confirmation.response !== 0) {
+      return { canceled: true, ...broadcastTerminalSessions() };
+    }
+    // Dialog await: window/slot may have disappeared
+    if (!mainWindow || mainWindow.isDestroyed() || !terminalSlots.has(sessionId)) {
       return { canceled: true, ...broadcastTerminalSessions() };
     }
   }

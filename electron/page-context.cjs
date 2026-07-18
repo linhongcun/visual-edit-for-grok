@@ -12,6 +12,8 @@ const {
   compactScalar,
   sanitizePageUrl,
   stripTerminalControls,
+  clampListLimit,
+  neutralizeFenceBreakers,
   REDACTED_VALUE,
 } = require("./clipboard-payload.cjs");
 
@@ -280,9 +282,11 @@ class PageFaultRing {
     return entry;
   }
 
-  /** @param {number} [limit] */
+  /** @param {number} [limit] explicit 0 → empty (not default) */
   list(limit = MAX_FAULTS_IN_PAYLOAD) {
-    const n = Math.max(0, Math.min(this.maxSize, Number(limit) || MAX_FAULTS_IN_PAYLOAD));
+    const n = clampListLimit(limit, MAX_FAULTS_IN_PAYLOAD, this.maxSize);
+    // slice(-0) is full array in JS — special-case empty
+    if (n === 0) return [];
     return this.items.slice(-n);
   }
 
@@ -423,11 +427,9 @@ class NetworkRequestRing {
    * Prefer failed + priority types, then recent others (playwright-mcp static=false spirit).
    * @param {number} [limit]
    */
+  /** @param {number} [limit] explicit 0 → empty (not default) */
   list(limit = MAX_NETWORK_IN_PAYLOAD) {
-    const n = Math.max(
-      0,
-      Math.min(this.maxSize, Number(limit) || MAX_NETWORK_IN_PAYLOAD),
-    );
+    const n = clampListLimit(limit, MAX_NETWORK_IN_PAYLOAD, this.maxSize);
     if (n === 0 || !this.items.length) return [];
     const failed = [];
     const priority = [];
@@ -482,7 +484,10 @@ function formatNetworkRequestsBlock(entries, opts = {}) {
       statusPart = String(e.status);
     }
     lines.push(
-      stripTerminalControls(`${i}. ${method} ${statusPart} ${type} ${url}`),
+      neutralizeFenceBreakers(
+        `${i}. ${method} ${statusPart} ${type} ${url}`,
+        400,
+      ),
     );
     i += 1;
   }

@@ -11,6 +11,7 @@ const {
   sanitizeAttributes,
   sanitizePageUrl,
   stripTerminalControls,
+  numberOr,
 } = require("./clipboard-payload.cjs");
 
 /** Soft cap for the whole agent_snapshot body (characters). */
@@ -130,10 +131,14 @@ function buildAgentSnapshot(selection, opts = {}) {
     return "";
   }
 
-  const maxChars = Math.max(400, Number(opts.maxChars) || MAX_SNAPSHOT_CHARS);
+  // numberOr: explicit maxNeighbors:0 must not fall through `||` to default
+  const maxChars = Math.max(
+    400,
+    numberOr(opts.maxChars, MAX_SNAPSHOT_CHARS),
+  );
   const maxNeighbors = Math.min(
     MAX_NEIGHBORS,
-    Math.max(0, Number(opts.maxNeighbors) || MAX_NEIGHBORS),
+    Math.max(0, Math.floor(numberOr(opts.maxNeighbors, MAX_NEIGHBORS))),
   );
 
   const lines = [];

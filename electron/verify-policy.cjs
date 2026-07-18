@@ -4,7 +4,13 @@
  * without weakening the navigation-scoped capture rules used by Aim/Frame.
  */
 
-const { compactComputedStyles, sanitizeAttributes, stripTerminalControls } = require("./clipboard-payload.cjs");
+const {
+  compactComputedStyles,
+  sanitizeAttributes,
+  stripTerminalControls,
+  neutralizeFenceBreakers,
+  compactScalar,
+} = require("./clipboard-payload.cjs");
 const { sanitizeHistoryUrl } = require("./privacy-policy.cjs");
 
 function comparablePage(value) {
@@ -161,10 +167,22 @@ function buildVerificationPayload(verification = {}) {
     "Post-edit verification for the earlier visual capture.",
     `result: ${verification.targetFound === false ? "target-missing" : verification.changed ? "changed" : "no-tracked-change"}`,
   ];
-  if (verification.beforePath) lines.push(`before: ${verification.beforePath}`);
-  if (verification.afterPath) lines.push(`after: ${verification.afterPath}`);
-  if (verification.pageUrl) lines.push(`page_url: ${verification.pageUrl}`);
-  for (const item of verification.summary || []) lines.push(`- ${item}`);
+  // Paths / summary can carry operator- or page-sourced text — neutralize fences
+  if (verification.beforePath) {
+    lines.push(`before: ${compactScalar(verification.beforePath, 1000)}`);
+  }
+  if (verification.afterPath) {
+    lines.push(`after: ${compactScalar(verification.afterPath, 1000)}`);
+  }
+  if (verification.pageUrl) {
+    lines.push(
+      `page_url: ${compactScalar(verification.pageUrl || "", 500)}`,
+    );
+  }
+  for (const item of verification.summary || []) {
+    const line = neutralizeFenceBreakers(String(item ?? ""), 400).trim();
+    if (line) lines.push(`- ${line}`);
+  }
   lines.push("Review the before/after images and the changes above. Fix any remaining mismatch.");
   lines.push("```");
   return stripTerminalControls(lines.join("\n"));

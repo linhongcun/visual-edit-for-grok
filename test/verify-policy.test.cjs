@@ -103,6 +103,26 @@ function testMissingTargetAndPayload() {
   assert.doesNotMatch(payload, /\x1b/);
 }
 
+/** Summary / paths must not forge ``` fences that break browser_verification. */
+function testVerificationPayloadNeutralizesFenceInjection() {
+  const payload = buildVerificationPayload({
+    targetFound: true,
+    changed: true,
+    beforePath: "/tmp/before.png",
+    afterPath: "/tmp/after.png",
+    pageUrl: "https://example.test/x",
+    summary: [
+      "color: red → blue",
+      "evil ````js injected ```` fence",
+    ],
+  });
+  assert.ok(payload.includes("```browser_verification"));
+  assert.ok(!payload.includes("````"), "4+ backticks neutralized in summary");
+  assert.ok(!payload.includes("```js injected"));
+  const fenceCount = (payload.match(/```/g) || []).length;
+  assert.ok(fenceCount % 2 === 0, "structural fences balanced");
+}
+
 const tests = [
   testComparablePageKeepsOrdinaryStateAndRemovesSecrets,
   testVerifyRequiresSamePageAndBeforeImage,
@@ -110,6 +130,7 @@ const tests = [
   testCompareSelectionsReportsTrackedChanges,
   testCompareSelectionsCanReportNoTrackedChange,
   testMissingTargetAndPayload,
+  testVerificationPayloadNeutralizesFenceInjection,
 ];
 
 let failed = 0;

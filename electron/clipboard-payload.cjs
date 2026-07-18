@@ -57,6 +57,37 @@ function neutralizeFenceBreakers(value, maxLength = 1000) {
     .slice(0, maxLength);
 }
 
+/**
+ * Parse a finite number, treating explicit 0 as valid (unlike `n || fallback`).
+ * null/undefined/""/NaN → fallback.
+ * @param {unknown} value
+ * @param {number} fallback
+ * @returns {number}
+ */
+function numberOr(value, fallback) {
+  if (value == null || value === "") return fallback;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+/**
+ * Cap a list limit; explicit 0 means empty (unlike `limit || default`).
+ * @param {unknown} limit
+ * @param {number} fallback
+ * @param {number} maxSize
+ * @returns {number}
+ */
+function clampListLimit(limit, fallback, maxSize) {
+  const cap = Math.max(0, Math.floor(Number(maxSize)) || 0);
+  const fb = Math.max(0, Math.floor(Number(fallback)) || 0);
+  if (limit == null || limit === "") {
+    return Math.min(cap, fb);
+  }
+  const n = Number(limit);
+  if (!Number.isFinite(n)) return Math.min(cap, fb);
+  return Math.max(0, Math.min(cap, Math.floor(n)));
+}
+
 function compactScalar(value, maxLength = 240) {
   return neutralizeFenceBreakers(value, maxLength)
     .replace(/[\r\n\t]+/g, " ")
@@ -512,6 +543,9 @@ module.exports = {
   sanitizeAttributes,
   sanitizePageUrl,
   compactScalar,
+  neutralizeFenceBreakers,
+  numberOr,
+  clampListLimit,
   selectionContentFingerprint,
   compactComputedStyles,
   selectionViewport,
