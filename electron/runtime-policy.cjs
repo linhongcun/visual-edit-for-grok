@@ -1118,13 +1118,16 @@ function resolveWorkspaceMaximize(state = {}, action = "none") {
  * }}
  */
 function planPreviewRecovery(input = {}) {
-  const maxRecoveries = Math.max(
-    0,
-    Math.min(
-      20,
-      Number(input.maxRecoveries) || DEFAULT_PREVIEW_RECOVERY_MAX,
-    ),
-  );
+  // An explicit 0 means "disable auto-recovery entirely" (mirrors the
+  // maxRetries=0 semantics in planWebglContextLoss / term-settings). Use ??
+  // so 0 survives; fall back to the default only when the caller omits it.
+  const rawMax =
+    input.maxRecoveries == null || input.maxRecoveries === ""
+      ? DEFAULT_PREVIEW_RECOVERY_MAX
+      : Number(input.maxRecoveries);
+  const maxRecoveries = Number.isFinite(rawMax)
+    ? Math.max(0, Math.min(20, Math.floor(rawMax)))
+    : DEFAULT_PREVIEW_RECOVERY_MAX;
   const recoveryCount = Math.max(0, Number(input.recoveryCount) || 0);
   if (!input.hasMainWindow) {
     return {

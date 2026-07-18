@@ -2,6 +2,16 @@
 
 All notable changes to **Visual Capture for Grok** are documented here.
 
+## [0.8.22] — 2026-07-18
+
+### Hardening pass (reviewed + fixed)
+
+- **Payload fence injection:** neutralize 3+ backtick runs in captured scalars; multi-line `user_intent` keeps newlines while still breaking forged fences
+- **agent_snapshot markup guard:** strip tags even when attributes contain `>`
+- **Preview recovery:** explicit `maxRecoveries: 0` disables auto-recovery (no `||` coercion)
+- **macOS window reopen:** re-seed terminal tabs from settings when Dock reopens an empty window
+- **Dialogs / preview nav:** guard destroyed window / webContents before dialogs and goBack/goForward
+
 ## [0.8.21] — 2026-07-16
 
 ### Fix maximize / layout reflow for Grok TUI

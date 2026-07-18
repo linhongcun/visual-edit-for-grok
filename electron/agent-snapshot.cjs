@@ -204,9 +204,18 @@ function buildAgentSnapshot(selection, opts = {}) {
   if (body.length > maxChars) {
     body = `${body.slice(0, maxChars - 1)}…`;
   }
-  // Hard guard: never include raw markup
-  if (body.includes("<") && /<\/?[a-z]/i.test(body)) {
-    body = body.replace(/<\/?[a-zA-Z][^>]*>/g, "");
+  // Hard guard: never include raw markup. The previous /<\/?[a-zA-Z][^>]*>/g
+  // regex stopped at the first ">" inside an attribute value (e.g.
+  // `<a title="a>b">link</a>` → stripped `<a title="a>` and left `b">link</a>`),
+  // leaking broken tags. Since this is defense-in-depth on already-sanitized
+  // fields and the snapshot is plain text for an LLM (not rendered), when any
+  // tag-like sequence is detected we strip the tag spans and then drop any
+  // surviving angle brackets so no partial markup can leak through.
+  if (body.includes("<") && /<\/?[a-zA-Z]/.test(body)) {
+    body = body.replace(/<\/?[a-zA-Z][\s\S]*?>/g, "");
+    // Second pass: a stray ">" from an attribute that contained ">" can remain;
+    // remove any leftover angle brackets that survived tag stripping.
+    body = body.replace(/[<>]/g, "");
   }
   return body;
 }

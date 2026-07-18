@@ -810,6 +810,20 @@ function createWindow() {
     // Renderer ready — layout + notify
     layoutViews();
     sendToRenderer("layout:bounds", getLayoutBounds());
+    // macOS "close window ≠ quit": closing the last window disposes every
+    // terminal session (PTYs are killed). When the user re-opens the window
+    // from the Dock, restore the persisted sessions so they don't get a blank
+    // single-tab window. On first launch, applyLoadedSettings() already seeded
+    // terminals before createWindow(), so this is a no-op then.
+    if (terminalSlots.size === 0) {
+      try {
+        const s = loadSettings(settingsFile());
+        seedTerminalsFromSettings(s);
+      } catch {
+        /* settings unreadable — leave empty, renderer will create a default tab */
+      }
+    }
+    broadcastTerminalSessions();
   });
 }
 
@@ -3599,7 +3613,19 @@ async function switchProjectCwd(cwd) {
     };
   }
   if (slot.pty.isGrokAlive()) {
-    const confirmation = await dialog.showMessageBox(mainWindow, {
+    const confirmParent =
+      mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+    // If the window closed while we were awaiting, treat as canceled rather
+    // than mutating state (restarting Grok, writing settings) headlessly.
+    if (!confirmParent) {
+      return {
+        projectCwd: slot.meta.cwd,
+        sessionId: slot.meta.id,
+        terminalRestarted: false,
+        canceled: true,
+      };
+    }
+    const confirmation = await dialog.showMessageBox(confirmParent, {
       type: "warning",
       title: "Switch project folder?",
       message: "Switching folders will stop Grok in this terminal tab.",
@@ -3961,7 +3987,12 @@ function registerIpc() {
   );
 
   ipcMain.handle("project:pick-cwd", async () => {
-    const result = await dialog.showOpenDialog(mainWindow, {
+    const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+    if (!parent) {
+      // Window closed before/while opening the picker — nothing to attach to.
+      return { projectCwd, terminalRestarted: false, canceled: true };
+    }
+    const result = await dialog.showOpenDialog(parent, {
       properties: ["openDirectory", "createDirectory"],
       title: "Project folder (Grok terminal cwd)",
       defaultPath: projectCwd,
@@ -3987,15 +4018,17 @@ function registerIpc() {
   });
 
   ipcMain.handle("preview:go-back", async () => {
-    if (previewView?.webContents.navigationHistory.canGoBack()) {
-      previewView.webContents.navigationHistory.goBack();
+    const contents = previewView?.webContents;
+    if (contents && !contents.isDestroyed() && contents.navigationHistory.canGoBack()) {
+      contents.navigationHistory.goBack();
     }
     return { ok: true };
   });
 
   ipcMain.handle("preview:go-forward", async () => {
-    if (previewView?.webContents.navigationHistory.canGoForward()) {
-      previewView.webContents.navigationHistory.goForward();
+    const contents = previewView?.webContents;
+    if (contents && !contents.isDestroyed() && contents.navigationHistory.canGoForward()) {
+      contents.navigationHistory.goForward();
     }
     return { ok: true };
   });

@@ -43,10 +43,23 @@ function stripTerminalControls(value) {
   );
 }
 
-function compactScalar(value, maxLength = 240) {
+/**
+ * Neutralize ``` fence-breakers without collapsing newlines (for multi-line
+ * intent / freeform blocks).
+ * @param {unknown} value
+ * @param {number} [maxLength]
+ */
+function neutralizeFenceBreakers(value, maxLength = 1000) {
   return stripTerminalControls(value)
+    .replace(/`+/g, (run) =>
+      run.length >= 3 ? run.replace(/`/g, "`\u200b") : run,
+    )
+    .slice(0, maxLength);
+}
+
+function compactScalar(value, maxLength = 240) {
+  return neutralizeFenceBreakers(value, maxLength)
     .replace(/[\r\n\t]+/g, " ")
-    .replace(/```/g, "`\u200b``")
     .trim()
     .slice(0, maxLength);
 }
@@ -382,13 +395,19 @@ function buildClipboardPayload(opts = {}) {
     );
     lines.push("");
     for (const row of normalizedDiffs) {
-      lines.push(`${row.property}: ${row.before} → ${row.after}`);
+      lines.push(
+        `${compactScalar(row.property, 80)}: ${compactScalar(row.before, 200)} → ${compactScalar(row.after, 200)}`,
+      );
     }
     lines.push("```");
     lines.push("");
   }
 
-  const intentText = typeof intent === "string" ? intent.trim() : "";
+  // Multi-line intent: break fences but keep newlines (do not use compactScalar).
+  const intentText =
+    typeof intent === "string"
+      ? neutralizeFenceBreakers(intent.trim(), 1000)
+      : "";
   if (intentText) {
     lines.push("```user_intent");
     lines.push(intentText);
@@ -398,7 +417,7 @@ function buildClipboardPayload(opts = {}) {
 
   if (screenshotPath) {
     lines.push("```browser_screenshot");
-    lines.push(`path: ${screenshotPath}`);
+    lines.push(`path: ${compactScalar(screenshotPath, 1000)}`);
     lines.push(
       "An image paste was attempted for this screenshot; attachment is not confirmed. If an image chip is visible, use its pixels. Otherwise use the local path or paste the clipboard image manually.",
     );
@@ -406,9 +425,8 @@ function buildClipboardPayload(opts = {}) {
     lines.push("");
   }
 
-  // Final defense in depth: intent/style payloads are not all routed through
-  // compactScalar, so strip terminal control bytes from the complete bracketed
-  // paste. In particular, ESC must never terminate bracketed-paste mode.
+  // Final defense in depth: strip terminal control bytes from the complete
+  // bracketed paste. ESC must never terminate bracketed-paste mode.
   return stripTerminalControls(lines.join("\n"));
 }
 

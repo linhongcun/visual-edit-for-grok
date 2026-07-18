@@ -208,6 +208,43 @@ function testPreviewRecoveryForceStillRespectsBudget() {
   assert.strictEqual(r.reason, "recovery-budget-exhausted");
 }
 
+/**
+ * An explicit maxRecoveries: 0 must disable auto-recovery entirely, not be
+ * coerced back to the default via `||`. Mirrors planWebglContextLoss / term
+ * maxRetries=0 semantics.
+ */
+function testPreviewRecoveryExplicitZeroDisables() {
+  const r = planPreviewRecovery({
+    hasMainWindow: true,
+    previewMissing: true,
+    recoveryCount: 0,
+    maxRecoveries: 0,
+  });
+  assert.strictEqual(r.action, "none");
+  assert.strictEqual(r.reason, "recovery-budget-exhausted");
+
+  // force:true must also respect the zero budget.
+  const forced = planPreviewRecovery({
+    hasMainWindow: true,
+    force: true,
+    forceReason: "crash",
+    recoveryCount: 0,
+    maxRecoveries: 0,
+  });
+  assert.strictEqual(forced.action, "none");
+  assert.strictEqual(forced.reason, "recovery-budget-exhausted");
+
+  // A non-zero explicit value still works (not accidentally disabled).
+  const once = planPreviewRecovery({
+    hasMainWindow: true,
+    previewMissing: true,
+    recoveryCount: 0,
+    maxRecoveries: 1,
+  });
+  assert.strictEqual(once.action, "recreate");
+  assert.strictEqual(once.nextRecoveryCount, 1);
+}
+
 function testMainWiresMaximizeAndRecovery() {
   const main = fs.readFileSync(
     path.join(__dirname, "../electron/main.cjs"),
@@ -231,6 +268,27 @@ function testMainWiresMaximizeAndRecovery() {
   assert.ok(
     main.includes("shouldPersistWorkspaceLayout"),
     "applyWorkspaceMaximize must gate disk writes via shouldPersistWorkspaceLayout",
+  );
+}
+
+/**
+ * macOS "close window ≠ quit": closing the last window disposes all terminal
+ * sessions. Re-opening from the Dock must restore persisted sessions instead
+ * of showing a blank window. Verify the recovery is wired into did-finish-load
+ * so it runs once the renderer is ready to receive the session list.
+ */
+function testMainRestoresTerminalsOnWindowReopen() {
+  const main = fs.readFileSync(
+    path.join(__dirname, "../electron/main.cjs"),
+    "utf8",
+  );
+  assert.ok(
+    /did-finish-load[\s\S]{0,900}seedTerminalsFromSettings/.test(main),
+    "did-finish-load must re-seed terminals from settings when slots are empty (window reopen)",
+  );
+  assert.ok(
+    /terminalSlots\.size\s*===\s*0[\s\S]{0,200}seedTerminalsFromSettings/.test(main),
+    "re-seed must be guarded by terminalSlots.size === 0 to avoid clobbering first launch",
   );
 }
 
@@ -282,7 +340,9 @@ function run() {
     testPreviewRecoveryOk,
     testPreviewRecoveryForceAfterCrashShape,
     testPreviewRecoveryForceStillRespectsBudget,
+    testPreviewRecoveryExplicitZeroDisables,
     testMainWiresMaximizeAndRecovery,
+    testMainRestoresTerminalsOnWindowReopen,
     testUiWiresMaximizeReflow,
   ];
   let failed = 0;

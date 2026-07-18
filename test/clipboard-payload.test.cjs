@@ -213,6 +213,52 @@ function testPayloadStripsTerminalControlInjection() {
   assert.ok(text.includes("safe[201~injected31m"));
 }
 
+function testPayloadNeutralizesBacktickRunsThatCouldForgeFences() {
+  // 4+ backticks in any scalar field used to re-form a real ``` after the
+  // naive `.replace(/```/g, ...)` pass, closing the browser_element block and
+  // corrupting the rest of the payload. Captured text/attributes must never
+  // contain a bare triple-backtick run.
+  const text = buildClipboardPayload({
+    selection: {
+      ...fixtureSelection,
+      text: "see ````js evil ```` here",
+      attributes: { "data-md": "``````nested``````" },
+      domPath: "main > pre[data-md=\"````\"]",
+    },
+    intent: "intent with ````` five backticks",
+    styleDiffs: {
+      color: { before: "```` before", after: "```` after" },
+    },
+  });
+  // No bare (un-separated) triple-backtick may survive inside captured content.
+  // The structural ```browser_element fences are added by the builder itself.
+  assert.ok(!text.includes("````"), "4-backtick run must be neutralized");
+  assert.ok(!text.includes("`````"), "5-backtick run must be neutralized");
+  assert.ok(
+    !text.includes("```js evil"),
+    "forged fenced code language must not appear",
+  );
+  // Structural fences are still intact and balanced.
+  const fenceCount = (text.match(/```/g) || []).length;
+  assert.ok(
+    fenceCount % 2 === 0,
+    `structural fences must be balanced, got ${fenceCount}`,
+  );
+}
+
+/** Multi-line intent must keep newlines (not collapse via compactScalar). */
+function testPayloadPreservesMultilineIntentNewlines() {
+  const text = buildClipboardPayload({
+    selection: fixtureSelection,
+    intent: "line one\nline two\nline three",
+  });
+  assert.ok(text.includes("```user_intent"));
+  assert.ok(
+    text.includes("line one\nline two\nline three"),
+    "intent newlines must survive for multi-line operator notes",
+  );
+}
+
 function run() {
   const tests = [
     testEmptyIntentNoStyleDiffs,
@@ -224,6 +270,8 @@ function run() {
     testPayloadIncludesCompactViewportScrollAndStyles,
     testPayloadRedactsSensitiveAttributesAndNeverUsesOuterHtml,
     testPayloadStripsTerminalControlInjection,
+    testPayloadNeutralizesBacktickRunsThatCouldForgeFences,
+    testPayloadPreservesMultilineIntentNewlines,
   ];
   let failed = 0;
   for (const t of tests) {

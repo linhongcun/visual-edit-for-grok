@@ -131,6 +131,29 @@ function testPayloadIncludesAgentSnapshotFence() {
   assert.ok(!text.includes("<button"));
 }
 
+/**
+ * Defense-in-depth markup guard must not leak broken tags when an attribute
+ * value contains ">". Previously the strip regex ([^>]*) stopped inside the
+ * attribute, leaving fragments like `b">link</a>` in the LLM context.
+ */
+function testMarkupGuardHandlesGreaterThanInAttributes() {
+  const snap = buildAgentSnapshot({
+    ...fixture,
+    text: 'see <a title="a>b">link</a> here',
+    attributes: {
+      class: "btn",
+      "data-html": '<img src=x onerror="evil">tag</img>',
+    },
+  });
+  // No complete tag may survive.
+  assert.ok(!/<[a-zA-Z/]/.test(snap), "no tag-like markup may remain");
+  assert.ok(!snap.includes("onerror"), "script handler must be stripped");
+  assert.ok(!snap.includes("<img"), "img tag must be stripped");
+  assert.ok(!snap.includes("</a>"), "closing tag must be stripped");
+  // The visible text content is preserved.
+  assert.ok(snap.includes("link"), "legitimate link text kept");
+}
+
 function testHideScrollbarsDefaultOn() {
   assert.strictEqual(shouldHideScrollbarsForCapture({}), true);
   assert.strictEqual(shouldHideScrollbarsForCapture(null), true);
@@ -168,6 +191,7 @@ function run() {
     testInferRole,
     testAccessibleNamePrefersAria,
     testPayloadIncludesAgentSnapshotFence,
+    testMarkupGuardHandlesGreaterThanInAttributes,
     testHideScrollbarsDefaultOn,
     testMainWiresScrollbarHide,
   ];
